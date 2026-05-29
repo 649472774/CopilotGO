@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CopilotGo</string>
+    <string name="login_title">登录 GitHub</string>
+    <string name="login_subtitle">用你的 GitHub Copilot 订阅</string>
+    <string name="login_start">开始登录</string>
+    <string name="login_open_browser">在浏览器中打开</string>
+    <string name="login_copy_code">复制验证码</string>
+    <string name="login_waiting">等待你在浏览器中授权…</string>
+    <string name="login_success">登录成功</string>
+    <string name="chat_input_hint">输入消息，发送给 Copilot…</string>
+    <string name="chat_send">发送</string>
+    <string name="chat_new">新会话</string>
+    <string name="chat_list_empty">还没有会话，点右下角新建</string>
+    <string name="settings_title">设置</string>
+    <string name="settings_logout">退出登录</string>
+    <string name="files_title">文件</string>
+    <string name="model_picker_title">选择模型</string>
+    <string name="error_generic">出错了</string>
+</resources>
