@@ -151,38 +151,55 @@ class ChatViewModel(
 
                 val buffer = StringBuilder()
                 // Typewriter：分离"接收 buffer"与"已显示长度"，单独协程每 20ms 推进 2 个字符
+                // 用 AtomicBoolean 保证跨协程可见性，try/finally 保证异常路径也能让 typewriter 退出
                 var displayedLen = 0
-                var streamDone = false
+                val streamDone = java.util.concurrent.atomic.AtomicBoolean(false)
                 val typewriter = launch {
-                    while (!streamDone || displayedLen < buffer.length) {
-                        if (displayedLen < buffer.length) {
-                            // 速率：~100 chars/sec；剩余太多时加速，避免结束后还在慢慢敲
-                            val remaining = buffer.length - displayedLen
-                            val step = when {
-                                remaining > 200 -> 8
-                                remaining > 60 -> 4
-                                else -> 2
+                    try {
+                        while (!streamDone.get() || displayedLen < buffer.length) {
+                            if (displayedLen < buffer.length) {
+                                val remaining = buffer.length - displayedLen
+                                val step = when {
+                                    remaining > 200 -> 8
+                                    remaining > 60 -> 4
+                                    else -> 2
+                                }
+                                displayedLen = (displayedLen + step).coerceAtMost(buffer.length)
+                                replaceAssistant(s, assistantId) {
+                                    it.copy(
+                                        content = buffer.substring(0, displayedLen),
+                                        isStreaming = true
+                                    )
+                                }
+                                bumpSession()
                             }
-                            displayedLen = (displayedLen + step).coerceAtMost(buffer.length)
-                            replaceAssistant(s, assistantId) {
-                                it.copy(content = buffer.substring(0, displayedLen), isStreaming = true)
-                            }
-                            bumpSession()
+                            delay(20)
                         }
-                        delay(20)
+                    } catch (_: kotlinx.coroutines.CancellationException) {
+                        // 正常取消，忽略
+                    } catch (t: Throwable) {
+                        Logger.e("typewriter error", throwable = t)
                     }
                 }
 
-                flow.collect { delta ->
-                    if (delta.text.isNotEmpty()) {
-                        buffer.append(delta.text)
+                try {
+                    flow.collect { delta ->
+                        if (delta.text.isNotEmpty()) {
+                            buffer.append(delta.text)
+                        }
+                        if (delta.isFinal) {
+                            streamDone.set(true)
+                        }
                     }
-                    if (delta.isFinal) {
-                        streamDone = true
+                } finally {
+                    // 无论成功 / 异常 / 取消，都让 typewriter 收尾退出，避免死循环
+                    streamDone.set(true)
+                    try {
+                        typewriter.join()
+                    } catch (_: kotlinx.coroutines.CancellationException) {
+                        // 父被取消时正常
                     }
                 }
-                streamDone = true
-                typewriter.join()
                 // 收尾：显示完整内容，停掉 streaming 标志
                 replaceAssistant(s, assistantId) {
                     it.copy(content = buffer.toString(), isStreaming = false)
