@@ -1,6 +1,10 @@
 package com.tongxie.copilotgo.ui.components
 
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,10 +20,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.tongxie.copilotgo.data.chat.UiMessage
@@ -29,6 +35,7 @@ import com.tongxie.copilotgo.ui.theme.UserBubble
 import com.tongxie.copilotgo.ui.theme.UserBubbleDark
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(message: UiMessage) {
     val isUser = message.role == "user"
@@ -40,6 +47,18 @@ fun MessageBubble(message: UiMessage) {
     }
 
     val alignment = if (isUser) Alignment.End else Alignment.Start
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+
+    // 长按 → 复制到剪贴板 + Toast 提示
+    val copyMessage = {
+        if (message.content.isNotEmpty()) {
+            clipboard.setText(AnnotatedString(message.content))
+            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val interactionSource = remember { MutableInteractionSource() }
 
     Column(
         modifier = Modifier
@@ -56,10 +75,10 @@ fun MessageBubble(message: UiMessage) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
+            // assistant 保留快捷复制按钮（一键，无需长按）
             if (!isUser && message.content.isNotEmpty()) {
-                val clipboard = LocalClipboardManager.current
                 IconButton(
-                    onClick = { clipboard.setText(AnnotatedString(message.content)) },
+                    onClick = { copyMessage() },
                     modifier = Modifier.padding(0.dp)
                 ) {
                     Icon(
@@ -75,14 +94,17 @@ fun MessageBubble(message: UiMessage) {
                 .widthIn(max = 320.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(bubbleColor)
+                // 长按复制（user / assistant 都支持），短按无操作（不要 ripple 闪烁）
+                .combinedClickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = {},
+                    onLongClick = { copyMessage() }
+                )
                 .padding(12.dp)
         ) {
             if (message.content.isEmpty() && message.isStreaming) {
-                Text(
-                    "…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                TypingDots()
             } else {
                 MarkdownText(
                     markdown = message.content.ifEmpty { " " },

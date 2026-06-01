@@ -14,7 +14,6 @@ import com.tongxie.copilotgo.data.chat.VisionRequest
 import com.tongxie.copilotgo.data.storage.SessionStore
 import com.tongxie.copilotgo.util.Logger
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -149,58 +148,21 @@ class ChatViewModel(
                     )
                 }
 
+                // 直接流式：每个 SSE delta 到达就立刻 append + 刷新 UI，
+                // 不再做"打字机"延迟模拟。SSE 自带节奏，模型快就快、慢就慢。
+                // collect lambda 跑在 Main（viewModelScope 默认），但 SSE 解析在 IO（flowOn 内部已切），
+                // 所以每帧只做 StringBuilder.append + StateFlow.update，不会卡主线程。
                 val buffer = StringBuilder()
-                // Typewriter：分离"接收 buffer"与"已显示长度"，单独协程每 20ms 推进 2 个字符
-                // 用 AtomicBoolean 保证跨协程可见性，try/finally 保证异常路径也能让 typewriter 退出
-                var displayedLen = 0
-                val streamDone = java.util.concurrent.atomic.AtomicBoolean(false)
-                val typewriter = launch {
-                    try {
-                        while (!streamDone.get() || displayedLen < buffer.length) {
-                            if (displayedLen < buffer.length) {
-                                val remaining = buffer.length - displayedLen
-                                val step = when {
-                                    remaining > 200 -> 8
-                                    remaining > 60 -> 4
-                                    else -> 2
-                                }
-                                displayedLen = (displayedLen + step).coerceAtMost(buffer.length)
-                                replaceAssistant(s, assistantId) {
-                                    it.copy(
-                                        content = buffer.substring(0, displayedLen),
-                                        isStreaming = true
-                                    )
-                                }
-                                bumpSession()
-                            }
-                            delay(20)
+                flow.collect { delta ->
+                    if (delta.text.isNotEmpty()) {
+                        buffer.append(delta.text)
+                        replaceAssistant(s, assistantId) {
+                            it.copy(content = buffer.toString(), isStreaming = true)
                         }
-                    } catch (_: kotlinx.coroutines.CancellationException) {
-                        // 正常取消，忽略
-                    } catch (t: Throwable) {
-                        Logger.e("typewriter error", throwable = t)
+                        bumpSession()
                     }
                 }
-
-                try {
-                    flow.collect { delta ->
-                        if (delta.text.isNotEmpty()) {
-                            buffer.append(delta.text)
-                        }
-                        if (delta.isFinal) {
-                            streamDone.set(true)
-                        }
-                    }
-                } finally {
-                    // 无论成功 / 异常 / 取消，都让 typewriter 收尾退出，避免死循环
-                    streamDone.set(true)
-                    try {
-                        typewriter.join()
-                    } catch (_: kotlinx.coroutines.CancellationException) {
-                        // 父被取消时正常
-                    }
-                }
-                // 收尾：显示完整内容，停掉 streaming 标志
+                // 收尾：停掉 streaming 标志（content 已是最新）
                 replaceAssistant(s, assistantId) {
                     it.copy(content = buffer.toString(), isStreaming = false)
                 }

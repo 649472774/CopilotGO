@@ -244,3 +244,42 @@ git add -A; git commit -m "wip"; git push
 ---
 
 _最后更新：v0.1.2 后_
+
+
+## 13. 发版流程（v0.1.3+）
+
+一键发版脚本：`scripts/release.ps1`
+
+```powershell
+# 常规 patch 发版（0.1.x -> 0.1.x+1），编译 + 装机 + 拷贝
+./scripts/release.ps1
+
+# 小版本（功能更新）
+./scripts/release.ps1 -Minor
+
+# 大版本（破坏性变更）
+./scripts/release.ps1 -Major
+
+# 编译完自动 commit + push 到 main
+./scripts/release.ps1 -Push
+
+# 只 bump 版本号不编译
+./scripts/release.ps1 -SkipBuild
+```
+
+脚本做的事：
+1. 解析 `app/build.gradle.kts` 的 versionCode / versionName，按 -Patch/-Minor/-Major 自增
+2. 用 Android Studio 内置 JDK 21 调 `gradlew assembleDebug`
+3. `adb install -r` 到 emulator-5554（无设备则跳过）
+4. APK 拷贝到 `D:\APK\CopilotGo-debug.apk` 和桌面
+5. `-Push` 时自动 `git add app/build.gradle.kts && git commit && git push`
+
+## 14. GitHub Actions CI
+
+`.github/workflows/build.yml` 在 push 到 main 或 PR 时自动跑：
+- JDK 21 + Android SDK
+- Gradle 缓存
+- `assembleDebug`
+- 上传 APK 为 artifact，名字 `CopilotGo-v<versionName>-debug`
+
+每次 push 后到 GitHub Actions 页可下载 APK。
