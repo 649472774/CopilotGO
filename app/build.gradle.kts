@@ -12,8 +12,8 @@ android {
         applicationId = "com.tongxie.copilotgo"
         minSdk = 34
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 11
+        versionName = "0.1.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -87,7 +87,15 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(libs.compose.markdown)
+    // 📐 LaTeX 公式渲染（ChatGPT-like 数学体验）
+    // 只使用 ext-latex 中独立的 JLatexMathDrawable 类（纯 Canvas/Drawable, 无 TextView/WebView/AppCompat 依赖）,
+    // 不创建 Markwon 实例 → 不会重蹈 v0.1.5 ANR 覆辙。Drawable 用 AndroidView+ImageView 显示。
+    implementation("io.noties.markwon:ext-latex:4.6.2")
+
+    // ⚠️ 不再引入 dev.jeziellago:compose-markdown
+    // 该库内部用 AndroidView 包 Markwon TextView, 与 Material3 Theme 不兼容(必须 AppCompat),
+    // 在 LazyColumn recomposition 时反复 inflate, 主线程会卡 10s+ 触发 ANR.
+    // 已改用纯 Compose 实现的 SimpleMarkdownText (见 ui/components/SimpleMarkdownText.kt).
 
     testImplementation(libs.junit)
     testImplementation(libs.mockwebserver)

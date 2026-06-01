@@ -7,20 +7,22 @@
 #   ./scripts/release.ps1 -SkipInstall   # 不装到模拟器
 #   ./scripts/release.ps1 -SkipCopy      # 不复制到 D:\APK 和桌面
 #   ./scripts/release.ps1 -Push          # 编译成功后自动 git commit + push
+#   ./scripts/release.ps1 -SkipBump      # 不 bump（沿用 build.gradle 当前版本）
 
 [CmdletBinding(DefaultParameterSetName = 'Patch')]
 param(
     [Parameter(ParameterSetName = 'Patch')] [switch]$Patch,
     [Parameter(ParameterSetName = 'Minor')] [switch]$Minor,
     [Parameter(ParameterSetName = 'Major')] [switch]$Major,
+    [switch]$SkipBump,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipCopy,
     [switch]$Push,
     [string]$JavaHome = "C:\Program Files\Android\Android Studio\jbr",
-    [string]$AdbPath  = "C:\Users\v-tongxie\AppData\Local\Android\Sdk\platform-tools\adb.exe",
+    [string]$AdbPath  = "$env:USERPROFILE\AppData\Local\Android\Sdk\platform-tools\adb.exe",
     [string]$ApkOut   = "D:\APK\CopilotGo-debug.apk",
-    [string]$DesktopOut = "C:\Users\v-tongxie\Desktop\CopilotGo-debug.apk"
+    [string]$DesktopOut = "$([Environment]::GetFolderPath('Desktop'))\CopilotGo-debug.apk"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,22 +42,28 @@ $mName = [regex]::Match($content, 'versionName\s*=\s*"(\d+)\.(\d+)\.(\d+)"')
 if (-not ($mCode.Success -and $mName.Success)) { throw "Failed to parse versionCode/versionName" }
 
 $oldCode = [int]$mCode.Groups[1].Value
-$major = [int]$mName.Groups[1].Value
-$minor = [int]$mName.Groups[2].Value
-$patch = [int]$mName.Groups[3].Value
-$oldName = "$major.$minor.$patch"
+$vMajor = [int]$mName.Groups[1].Value
+$vMinor = [int]$mName.Groups[2].Value
+$vPatch = [int]$mName.Groups[3].Value
+$oldName = "$vMajor.$vMinor.$vPatch"
 
-if ($Major)     { $major++; $minor = 0; $patch = 0 }
-elseif ($Minor) { $minor++; $patch = 0 }
-else            { $patch++ }   # 默认 Patch
+if ($SkipBump) {
+    $newCode = $oldCode
+    $newName = $oldName
+    Write-Host "[-SkipBump] keeping versionCode $oldCode, versionName $oldName" -ForegroundColor Yellow
+} else {
+    if ($Major)     { $vMajor++; $vMinor = 0; $vPatch = 0 }
+    elseif ($Minor) { $vMinor++; $vPatch = 0 }
+    else            { $vPatch++ }   # 默认 Patch
 
-$newCode = $oldCode + 1
-$newName = "$major.$minor.$patch"
+    $newCode = $oldCode + 1
+    $newName = "$vMajor.$vMinor.$vPatch"
 
-$content = [regex]::Replace($content, 'versionCode\s*=\s*\d+', "versionCode = $newCode")
-$content = [regex]::Replace($content, 'versionName\s*=\s*"[\d.]+"', "versionName = `"$newName`"")
-Set-Content -Path $gradle -Value $content -Encoding UTF8 -NoNewline
-Write-Host "Bumped: versionCode $oldCode -> $newCode, versionName $oldName -> $newName" -ForegroundColor Green
+    $content = [regex]::Replace($content, 'versionCode\s*=\s*\d+', "versionCode = $newCode")
+    $content = [regex]::Replace($content, 'versionName\s*=\s*"[\d.]+"', "versionName = `"$newName`"")
+    Set-Content -Path $gradle -Value $content -Encoding UTF8 -NoNewline
+    Write-Host "Bumped: versionCode $oldCode -> $newCode, versionName $oldName -> $newName" -ForegroundColor Green
+}
 
 if ($SkipBuild) {
     Write-Host "[-SkipBuild] only bumped version, exiting." -ForegroundColor Yellow
@@ -100,7 +108,7 @@ if (-not $SkipCopy) {
 # === 5. git commit + push（可选）===
 if ($Push) {
     Write-Host "git commit + push ..." -ForegroundColor Cyan
-    git add app/build.gradle.kts
+    git add -A
     git commit -m "chore: release v$newName (versionCode $newCode)"
     git push
     Write-Host "Pushed v$newName" -ForegroundColor Green

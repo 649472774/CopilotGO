@@ -1,17 +1,17 @@
 package com.tongxie.copilotgo.data.auth
 
 import com.tongxie.copilotgo.data.Constants
+import com.tongxie.copilotgo.data.net.HttpClientProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.OkHttpClient
 import okhttp3.Request
 
 class DeviceFlowClient(
-    private val httpClient: OkHttpClient,
+    private val httpProvider: HttpClientProvider,
     private val json: Json,
     private val clientId: String = Constants.CLIENT_ID,
     private val deviceCodeUrl: String = Constants.GITHUB_DEVICE_CODE_URL,
@@ -28,7 +28,7 @@ class DeviceFlowClient(
             .post(body)
             .header("Accept", "application/json")
             .build()
-        val resp = httpClient.newCall(req).executeAsync()
+        val resp = httpProvider.client.newCall(req).executeAsync()
         if (!resp.isSuccessful) error("device_code request failed: ${resp.code}")
         val text = resp.body?.string().orEmpty()
         return json.decodeFromString(DeviceCodeResponse.serializer(), text)
@@ -75,7 +75,7 @@ class DeviceFlowClient(
             .post(body)
             .header("Accept", "application/json")
             .build()
-        val resp = httpClient.newCall(req).executeAsync()
+        val resp = httpProvider.client.newCall(req).executeAsync()
         val text = resp.body?.string().orEmpty()
         return json.decodeFromString(AccessTokenResponse.serializer(), text)
     }

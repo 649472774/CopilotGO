@@ -43,6 +43,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -122,13 +123,45 @@ fun ChatScreen(
         }
     }
 
-    // 监听 size + 最后一条 assistant content 长度变化（流式追加时也滚动）
+    // 自动滚动逻辑：
+    // 1) 加 bottom anchor 占位 item，scrollToItem(anchorIndex) 等价于"滚到最底"，
+    //    避免 scrollToItem(lastMessageIndex) 把长消息顶到视口顶部的弹跳 bug。
+    // 2) followBottom 跟踪用户意图：在底部=true，手动滑离=false。
+    // 3) 用户停止滑动时根据是否仍在底部更新 followBottom。
+    // 4) 只在 followBottom=true 且非用户拖动时跟随流式输出。
+    val messageCount = session?.messages?.size ?: 0
+    val anchorIndex = messageCount  // anchor 是 items 之后的最后一项
+
+    val isPinnedToBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            last == null || last.index == info.totalItemsCount - 1
+        }
+    }
+
+    var followBottom by remember { mutableStateOf(true) }
+
+    // 用户手指离开屏幕（isScrollInProgress: true→false）时同步意图
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress) {
+            followBottom = isPinnedToBottom
+        }
+    }
+
+    // 新消息到达：恢复跟随并动画滚到底
+    LaunchedEffect(messageCount, sending) {
+        if (messageCount > 0) {
+            followBottom = true
+            listState.animateScrollToItem(anchorIndex)
+        }
+    }
+
+    // 流式追加：仅在用户未滑离 & 当前不在拖动时跟随
     val lastAssistantLen = session?.messages?.lastOrNull { it.role == "assistant" }?.content?.length ?: 0
-    val rev = session?.revision ?: 0
-    LaunchedEffect(rev, session?.messages?.size, lastAssistantLen, sending) {
-        val s = session
-        if (s != null && s.messages.isNotEmpty()) {
-            listState.animateScrollToItem(s.messages.size - 1)
+    LaunchedEffect(lastAssistantLen) {
+        if (sending && followBottom && !listState.isScrollInProgress && messageCount > 0) {
+            listState.scrollToItem(anchorIndex)
         }
     }
 
@@ -181,6 +214,11 @@ fun ChatScreen(
                 ) {
                     items(s.messages, key = { it.id }) { msg ->
                         MessageBubble(message = msg)
+                    }
+                    // 底部锚点（1px 透明），scrollToItem(anchorIndex) 把它对齐到视口顶部
+                    // 等价于把最后一条消息整体推到视口底部，避免长消息被弹到顶部。
+                    item(key = "__bottom_anchor__") {
+                        Spacer(modifier = Modifier.height(1.dp))
                     }
                 }
             }

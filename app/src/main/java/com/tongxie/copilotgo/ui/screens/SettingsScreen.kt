@@ -1,20 +1,27 @@
 package com.tongxie.copilotgo.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -23,21 +30,37 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.tongxie.copilotgo.BuildConfig
 import com.tongxie.copilotgo.data.auth.AuthState
-import com.tongxie.copilotgo.data.storage.AppPaths
+import com.tongxie.copilotgo.data.proxy.ProxyConfig
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
+import com.tongxie.copilotgo.ui.viewmodel.ProxyViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     authVm: AuthViewModel,
-    paths: AppPaths,
-    onLoggedOut: () -> Unit,
+    proxyVm: ProxyViewModel,
+    onOpenAccount: () -> Unit,
+    onOpenProxy: () -> Unit,
+    onOpenStorage: () -> Unit,
+    onOpenAbout: () -> Unit,
     onBack: () -> Unit
 ) {
-    val state by authVm.state.collectAsState()
+    val authState by authVm.state.collectAsState()
+    val proxyConfig by proxyVm.config.collectAsState()
+
+    val accountSummary = when (val s = authState) {
+        is AuthState.LoggedIn -> "已登录 · ${s.sku ?: "未知 SKU"}"
+        is AuthState.AwaitingUserAuthorization -> "等待 GitHub 授权"
+        is AuthState.Failed -> "登录失败"
+        AuthState.NotLoggedIn -> "未登录"
+    }
+
+    val proxySummary = proxySummaryText(proxyConfig)
 
     Scaffold(
         topBar = {
@@ -45,7 +68,7 @@ fun SettingsScreen(
                 title = { Text("设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -55,40 +78,83 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("账号", style = MaterialTheme.typography.titleMedium)
-            val s = state
-            val sku = if (s is AuthState.LoggedIn) (s.sku ?: "未知") else "未登录"
-            Text("Copilot SKU：$sku", style = MaterialTheme.typography.bodyMedium)
-
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    authVm.logout()
-                    onLoggedOut()
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error
-                )
-            ) { Text("退出登录") }
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            Text("存储", style = MaterialTheme.typography.titleMedium)
-            Text(
-                paths.describe(),
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium
+            SettingsMenuCard(
+                icon = Icons.Filled.AccountCircle,
+                title = "账号",
+                subtitle = accountSummary,
+                onClick = onOpenAccount
             )
 
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            Text("关于", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "CopilotGo · V0.1\n非官方移动客户端，复用 GitHub Copilot 订阅。\n使用即视为接受可能违反 GitHub ToS 的风险。",
-                style = MaterialTheme.typography.bodyMedium
+            SettingsMenuCard(
+                icon = Icons.Filled.Settings,
+                title = "代理",
+                subtitle = proxySummary,
+                onClick = onOpenProxy
+            )
+
+            SettingsMenuCard(
+                icon = Icons.Filled.Folder,
+                title = "存储",
+                subtitle = "查看应用数据目录",
+                onClick = onOpenStorage
+            )
+
+            SettingsMenuCard(
+                icon = Icons.Filled.Info,
+                title = "关于",
+                subtitle = "版本 ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                onClick = onOpenAbout
             )
         }
+    }
+}
+
+private fun proxySummaryText(cfg: ProxyConfig): String {
+    if (!cfg.enabled) return "未启用"
+    val host = cfg.host.ifBlank { "—" }
+    return "${cfg.type.name} · $host:${cfg.port}"
+}
+
+@Composable
+private fun SettingsMenuCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        ListItem(
+            headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+            supportingContent = {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            leadingContent = {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            },
+            trailingContent = {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+        )
     }
 }

@@ -16,9 +16,14 @@ import com.tongxie.copilotgo.ui.screens.ChatListScreen
 import com.tongxie.copilotgo.ui.screens.ChatScreen
 import com.tongxie.copilotgo.ui.screens.FilesScreen
 import com.tongxie.copilotgo.ui.screens.LoginScreen
+import com.tongxie.copilotgo.ui.screens.SettingsAboutScreen
+import com.tongxie.copilotgo.ui.screens.SettingsAccountScreen
+import com.tongxie.copilotgo.ui.screens.SettingsProxyScreen
 import com.tongxie.copilotgo.ui.screens.SettingsScreen
+import com.tongxie.copilotgo.ui.screens.SettingsStorageScreen
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ChatViewModel
+import com.tongxie.copilotgo.ui.viewmodel.ProxyViewModel
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
 
 object Routes {
@@ -26,6 +31,10 @@ object Routes {
     const val CHAT_LIST = "chat_list"
     const val CHAT = "chat/{sessionId}"
     const val SETTINGS = "settings"
+    const val SETTINGS_ACCOUNT = "settings/account"
+    const val SETTINGS_PROXY = "settings/proxy"
+    const val SETTINGS_STORAGE = "settings/storage"
+    const val SETTINGS_ABOUT = "settings/about"
     const val FILES = "files"
 
     fun chat(sessionId: String) = "chat/$sessionId"
@@ -77,7 +86,7 @@ fun AppNavigation(container: AppContainer) {
             val chatVm: ChatViewModel = viewModel(
                 key = sessionId,
                 factory = SimpleVMFactory {
-                    ChatViewModel(sessionId, container.sessionStore, container.chatClient)
+                    ChatViewModel(sessionId, container.chatStreamCenter)
                 }
             )
             ChatScreen(
@@ -87,14 +96,47 @@ fun AppNavigation(container: AppContainer) {
             )
         }
         composable(Routes.SETTINGS) {
+            val proxyVm: ProxyViewModel = viewModel(
+                factory = SimpleVMFactory { ProxyViewModel(container.proxySettings, container.healthChecker) }
+            )
             SettingsScreen(
                 authVm = authVm,
-                paths = container.paths,
+                proxyVm = proxyVm,
+                onOpenAccount = { nav.navigate(Routes.SETTINGS_ACCOUNT) },
+                onOpenProxy = { nav.navigate(Routes.SETTINGS_PROXY) },
+                onOpenStorage = { nav.navigate(Routes.SETTINGS_STORAGE) },
+                onOpenAbout = { nav.navigate(Routes.SETTINGS_ABOUT) },
+                onBack = { nav.popBackStack() }
+            )
+        }
+        composable(Routes.SETTINGS_ACCOUNT) {
+            SettingsAccountScreen(
+                authVm = authVm,
                 onLoggedOut = {
                     nav.navigate(Routes.LOGIN) {
                         popUpTo(0)
                     }
                 },
+                onBack = { nav.popBackStack() }
+            )
+        }
+        composable(Routes.SETTINGS_PROXY) {
+            val proxyVm: ProxyViewModel = viewModel(
+                factory = SimpleVMFactory { ProxyViewModel(container.proxySettings, container.healthChecker) }
+            )
+            SettingsProxyScreen(
+                proxyVm = proxyVm,
+                onBack = { nav.popBackStack() }
+            )
+        }
+        composable(Routes.SETTINGS_STORAGE) {
+            SettingsStorageScreen(
+                paths = container.paths,
+                onBack = { nav.popBackStack() }
+            )
+        }
+        composable(Routes.SETTINGS_ABOUT) {
+            SettingsAboutScreen(
                 onBack = { nav.popBackStack() }
             )
         }

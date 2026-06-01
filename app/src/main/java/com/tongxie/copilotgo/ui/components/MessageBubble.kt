@@ -33,7 +33,6 @@ import com.tongxie.copilotgo.ui.theme.AssistantBubble
 import com.tongxie.copilotgo.ui.theme.AssistantBubbleDark
 import com.tongxie.copilotgo.ui.theme.UserBubble
 import com.tongxie.copilotgo.ui.theme.UserBubbleDark
-import dev.jeziellago.compose.markdowntext.MarkdownText
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -106,8 +105,12 @@ fun MessageBubble(message: UiMessage) {
             if (message.content.isEmpty() && message.isStreaming) {
                 TypingDots()
             } else {
-                MarkdownText(
-                    markdown = message.content.ifEmpty { " " },
+                // 统一走 SimpleMarkdownText：流式中也实时渲染 markdown（对齐 ChatGPT 行为）。
+                // SimpleMarkdownText 是纯 Kotlin 行扫描 + remember(markdown) 缓存，
+                // 几 KB 文本毫秒级 parse，不会卡。
+                // 未闭合的 **bold 会按原文显示，闭合瞬间变粗体——这正是 ChatGPT / Claude 的体验。
+                SimpleMarkdownText(
+                    markdown = message.content,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }

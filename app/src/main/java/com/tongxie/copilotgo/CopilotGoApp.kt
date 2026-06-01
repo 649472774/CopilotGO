@@ -5,9 +5,17 @@ import com.tongxie.copilotgo.data.auth.AuthRepository
 import com.tongxie.copilotgo.data.auth.CopilotTokenClient
 import com.tongxie.copilotgo.data.auth.DeviceFlowClient
 import com.tongxie.copilotgo.data.auth.TokenStore
+import com.tongxie.copilotgo.data.chat.ChatStreamCenter
 import com.tongxie.copilotgo.data.chat.CopilotChatClient
+import com.tongxie.copilotgo.data.net.HttpClientProvider
+import com.tongxie.copilotgo.data.net.ProxyAwareHttpClientProvider
+import com.tongxie.copilotgo.data.proxy.ProxyHealthChecker
+import com.tongxie.copilotgo.data.proxy.ProxySettingsStore
 import com.tongxie.copilotgo.data.storage.AppPaths
 import com.tongxie.copilotgo.data.storage.SessionStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -42,24 +50,38 @@ class AppContainer(app: CopilotGoApp) {
         }
     }
 
-    val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .callTimeout(0, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .addInterceptor(logger)
-        .build()
+    val proxySettings = ProxySettingsStore(app)
+
+    private val providerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    val httpProvider: HttpClientProvider = ProxyAwareHttpClientProvider(
+        baseBuilder = {
+            OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .callTimeout(0, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .addInterceptor(logger)
+        },
+        proxyConfigFlow = proxySettings.config,
+        scope = providerScope
+    )
 
     val tokenStore = TokenStore(app)
 
-    private val deviceFlow = DeviceFlowClient(http, json)
-    private val copilotToken = CopilotTokenClient(http, json)
+    private val deviceFlow = DeviceFlowClient(httpProvider, json)
+    private val copilotToken = CopilotTokenClient(httpProvider, json)
 
     val authRepo = AuthRepository(tokenStore, deviceFlow, copilotToken)
 
-    val chatClient = CopilotChatClient(http, json, authRepo)
+    val healthChecker = ProxyHealthChecker(httpProvider, authRepo)
+
+    val chatClient = CopilotChatClient(httpProvider, json, authRepo)
 
     val paths = AppPaths(app)
     val sessionStore = SessionStore(paths, json)
+
+    /** Application 级单例：跨 ChatViewModel 生命周期持有 SSE 流任务。详见类注释 & AGENTS.md §27。 */
+    val chatStreamCenter = ChatStreamCenter(sessionStore, chatClient)
 }

@@ -36,7 +36,7 @@
 </history>
 
 <work_done>
-**已创建工程目录**：`C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\`
+**已创建工程目录**：`<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\`
 
 **已创建文件**：
 - `plan.md`（项目根目录上一级）
@@ -110,7 +110,7 @@
 - 内置文件管理器**只管 App 私有目录**
 
 **环境信息**（用户机器）：
-- Android SDK: `C:\Users\v-tongxie\AppData\Local\Android\Sdk`
+- Android SDK: `<USER_HOME>\AppData\Local\Android\Sdk`
 - Android Studio JDK 21: `C:\Program Files\Android\Android Studio\jbr`
 - 系统 Java: JDK 1.8（太老，必须用 AS 的 JDK 21，已在 `gradle.properties` 通过 `org.gradle.java.home` 指定）
 - AVD：`Medium_Phone_API_36`（可用于冒烟测试）
@@ -128,7 +128,7 @@
 </technical_details>
 
 <important_files>
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\plan.md`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\plan.md`
   - 记录所有关键决策、V1 范围 checklist
   
 - `files/CopilotGo/gradle/libs.versions.toml`
@@ -193,7 +193,7 @@
 
 6. **构建 APK**：
    ```powershell
-   cd "C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo"
+   cd "<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo"
    .\gradlew.bat :app:assembleDebug --no-daemon
    ```
    预期产物：`app/build/outputs/apk/debug/app-debug.apk`
@@ -248,7 +248,7 @@
 **所有目标已基本达成**：APK 构建成功、单测全过、AVD 上 App 启动渲染正常、Device Flow 联通 GitHub 实测成功。
 
 **最终产物**：
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build\outputs\apk\debug\app-debug.apk` (59.45 MB)
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build\outputs\apk\debug\app-debug.apk` (59.45 MB)
 - 截图：`files\CopilotGo-first-launch.png`（系统 ANR）和 `files\CopilotGo-launch.png`（登录页正常）
 
 **构建过程中修复的问题**：
@@ -299,7 +299,7 @@
 **APK 大小 (59 MB)**：debug 包未压缩，大头是 `material-icons-extended`（包含全部 Material Icons）。release + R8 可缩到 ~15 MB。
 
 **用户机器路径**：
-- Android SDK: `C:\Users\v-tongxie\AppData\Local\Android\Sdk`
+- Android SDK: `<USER_HOME>\AppData\Local\Android\Sdk`
 - Android Studio JDK: `C:\Program Files\Android\Android Studio\jbr`（必须在 gradle.properties 指定 `org.gradle.java.home`，否则用系统 JDK 1.8 会失败）
 - 唯一 AVD: `Medium_Phone_API_36.1`
 - adb: `<SDK>\platform-tools\adb.exe`
@@ -318,19 +318,19 @@
 </technical_details>
 
 <important_files>
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build\outputs\apk\debug\app-debug.apk`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build\outputs\apk\debug\app-debug.apk`
   - **最终产物**，可直接 `adb install -r` 或拷到手机安装
   - 包名 `com.tongxie.copilotgo.debug`（debug 后缀），主 Activity `com.tongxie.copilotgo.MainActivity`
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\gradle.properties`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\gradle.properties`
   - 修复点 #1：删了 `android.defaults.buildfeatures.buildconfig=true`
   - 必含 `org.gradle.java.home=C\:\\Program Files\\Android\\Android Studio\\jbr`
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build.gradle.kts`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build.gradle.kts`
   - 修复点 #2：plugins 块只剩 `android.application`、`kotlin.compose`、`kotlin.serialization`（删了 `kotlin.android`）
   - 修复点 #3：`kotlin { compilerOptions { ... } }` 块在 android{} 外面（顶层）
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\Constants.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\Constants.kt`
   - 整个 App 的"灰心脏"：VS Code client_id + Copilot 内部端点 + 伪装头
   - 改 client_id 或 header 出问题大概率从这里下手
 
@@ -353,7 +353,7 @@
 
 - `files\CopilotGo-launch.png` —— 第二次截图，**证明 App UI 渲染正常**
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\plan.md` —— 决策与 V1 范围 checklist
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\plan.md` —— 决策与 V1 范围 checklist
 </important_files>
 
 <next_steps>
@@ -363,12 +363,12 @@
 
 1. **把 APK 拷到方便交付的位置**：
    ```powershell
-   Copy-Item "C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build\outputs\apk\debug\app-debug.apk" "C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo-debug.apk"
+   Copy-Item "<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\build\outputs\apk\debug\app-debug.apk" "<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo-debug.apk"
    ```
 
 2. **关掉 emulator**（避免长开）：
    ```powershell
-   & "C:\Users\v-tongxie\AppData\Local\Android\Sdk\platform-tools\adb.exe" emu kill
+   & "<USER_HOME>\AppData\Local\Android\Sdk\platform-tools\adb.exe" emu kill
    ```
 
 3. **告知用户最终结果**，包括：
@@ -473,29 +473,29 @@
 </technical_details>
 
 <important_files>
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\Constants.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\Constants.kt`
   - **必改**：`DEFAULT_MODEL = "claude-sonnet-4"` → `"claude-sonnet-4.5"` 或 `"gpt-4.1"`
   - **必改**：`FALLBACK_MODELS` 全部换为真实 24 个里的子集（推荐 `claude-sonnet-4.5`、`gpt-4.1`、`gpt-5-mini`、`gemini-2.5-pro`、`claude-haiku-4.5`）
   - 第 22 行 DEFAULT_MODEL；24-31 行 FALLBACK_MODELS
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\viewmodel\SessionListViewModel.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\viewmodel\SessionListViewModel.kt`
   - **必改**：注入 AuthRepository、监听 state、登录后 listModels；提供 `refreshModels()` 公开方法
   - 第 22-30 行的 init 块要改成 listenAuthStateThenLoad
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\viewmodel\ChatViewModel.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\viewmodel\ChatViewModel.kt`
   - **可改**：`send()` 之前若 `s.model` 不在可用 models 列表，应自动切换 + UI 提示。第 95-117 行的 streamJob catch 块要识别 `model_not_supported` 然后自动重试
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\CopilotGoApp.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\CopilotGoApp.kt`
   - 需要把 AuthRepository 通过 ViewModel Factory 传给 SessionListViewModel；可能需要修 SimpleVMFactory（在 AppNavigation.kt）
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\models_response.json`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\models_response.json`
   - 已 dump 的真实 24 个模型完整 JSON
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo-debug.apk`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo-debug.apk`
   - 当前已装版（含 endpoints 修复，但还有 model id 问题）
   - 包名 `com.tongxie.copilotgo.debug`
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\screens\ChatListScreen.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\screens\ChatListScreen.kt`
   - 新建会话入口；用户在这里点"新会话"后用 `DEFAULT_MODEL`，所以这里间接也受 Constants 影响
 </important_files>
 
@@ -610,7 +610,7 @@ _session.update { it?.copy() }           // copy 后 newSession.equals(oldSessio
 - LaunchedEffect(size, lastAssistantLen, sending) → autoscroll
 
 **测试环境**：
-- ADB: `C:\Users\v-tongxie\AppData\Local\Android\Sdk\platform-tools\adb.exe`
+- ADB: `<USER_HOME>\AppData\Local\Android\Sdk\platform-tools\adb.exe`
 - emulator-5554 在线
 - JAVA_HOME: `C:\Program Files\Android\Android Studio\jbr`
 - Build 命令: `Set-Location ...\CopilotGo; .\gradlew.bat --no-daemon assembleDebug`
@@ -621,7 +621,7 @@ _session.update { it?.copy() }           // copy 后 newSession.equals(oldSessio
 **uiautomator 操作模板**：
 ```
 adb shell uiautomator dump /sdcard/d.xml
-adb pull /sdcard/d.xml C:\Users\v-tongxie\AppData\Local\Temp\d.xml
+adb pull /sdcard/d.xml <USER_HOME>\AppData\Local\Temp\d.xml
 Select-Xml -Path ... -XPath "//node[@text!='']"
 ```
 content-desc 中文："发送"/"附件"/"停止"/"返回"/"删除"/"设置"/"文件"/"新建"
@@ -632,26 +632,26 @@ content-desc 中文："发送"/"附件"/"停止"/"返回"/"删除"/"设置"/"文
 </technical_details>
 
 <important_files>
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\viewmodel\ChatViewModel.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\viewmodel\ChatViewModel.kt`
    - **核心 bug 在这**：第 95-137 行 streamJob，第 107 行 `assistantMsg.content = ...` 是原地修改 → StateFlow dedup
    - 需要改：把每次 delta 产生新 UiMessage + 新 messages list + 新 Session copy
    - 165 行总长，第 51 行 `send()` 入口
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\chat\ChatModels.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\chat\ChatModels.kt`
    - 第 63-69 行 `UiMessage` data class，content 是 `var`，要改成 `val`
    - 同时 Session.messages 是 MutableList<UiMessage>，可能也要审视
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\screens\ChatScreen.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\ui\screens\ChatScreen.kt`
    - 第 108 行附近 LaunchedEffect autoscroll；UI 端不需要改，等 ChatViewModel 真正发新值就会 work
    - 第 100 行附近 error snackbar 逻辑
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\chat\CopilotChatClient.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\chat\CopilotChatClient.kt`
    - streamChat() 返回 Flow<StreamDelta>，每次 SSE chunk 发射；后端正常工作
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\Constants.kt`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo\app\src\main\java\com\tongxie\copilotgo\data\Constants.kt`
    - DEFAULT_MODEL=claude-sonnet-4.5；FALLBACK 已是 5 个真实模型
 
-- `C:\Users\v-tongxie\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo-debug.apk`
+- `<USER_HOME>\.copilot\session-state\9f0ec66f-5f7b-4fab-adc3-b69cf4286829\files\CopilotGo-debug.apk`
    - 当前装的 APK（有流式 bug，待覆盖）
 </important_files>
 
@@ -825,7 +825,7 @@ _session.value = s.copy()   // new.revision == old.revision → equals true → 
 - 产物：`app/build/outputs/apk/debug/app-debug.apk` → 复制到 `files/CopilotGo-debug.apk`
 - 编译时间约 60-150 秒
 
-**ADB 路径**：`C:\Users\v-tongxie\AppData\Local\Android\Sdk\platform-tools\adb.exe`
+**ADB 路径**：`<USER_HOME>\AppData\Local\Android\Sdk\platform-tools\adb.exe`
 </technical_details>
 
 <important_files>

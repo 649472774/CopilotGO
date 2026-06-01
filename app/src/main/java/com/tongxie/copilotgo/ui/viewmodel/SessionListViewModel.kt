@@ -27,6 +27,12 @@ class SessionListViewModel(
     private val _models = MutableStateFlow<List<ModelInfo>>(emptyList())
     val models: StateFlow<List<ModelInfo>> = _models
 
+    // 节流：防止 auth state 重复 emit + ChatScreen 进入 + session 切换 多次触发 GET /models
+    @Volatile
+    private var lastRefreshAt: Long = 0L
+    @Volatile
+    private var refreshing: Boolean = false
+
     init {
         viewModelScope.launch { store.load() }
         // 监听登录态：每次进入 LoggedIn 重新拉取真实模型列表
@@ -38,14 +44,25 @@ class SessionListViewModel(
     }
 
     fun refreshModels() {
+        val now = System.currentTimeMillis()
+        // 已经在请求中，或者距离上次成功不到 30s，跳过
+        if (refreshing) {
+            Logger.d("refreshModels: skip (in flight)")
+            return
+        }
+        if (_models.value.isNotEmpty() && now - lastRefreshAt < 30_000L) {
+            Logger.d("refreshModels: skip (throttled, last=${now - lastRefreshAt}ms ago)")
+            return
+        }
+        refreshing = true
         viewModelScope.launch {
             runCatching { chatClient.listModels() }
                 .onSuccess { list ->
                     if (list.isNotEmpty()) {
                         Logger.i("Loaded ${list.size} real models")
                         _models.value = list
+                        lastRefreshAt = System.currentTimeMillis()
                     } else if (_models.value.isEmpty()) {
-                        // 真没拉到，才用 fallback 让 UI 至少能选
                         _models.value = Constants.FALLBACK_MODELS.map { ModelInfo(id = it) }
                     }
                 }
@@ -55,6 +72,7 @@ class SessionListViewModel(
                         _models.value = Constants.FALLBACK_MODELS.map { ModelInfo(id = it) }
                     }
                 }
+            refreshing = false
         }
     }
 
