@@ -301,15 +301,10 @@ fun RemoteWebViewScreen(
             .background(EmbedBg)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 确定性状态栏占位条：高度 = 系统状态栏（边到边时为真实高度；decor 已避让时为 0），
-            // 深色填充。网页内容区永远从它「下方」开始，从结构上保证网页绝不会渲染到状态栏区域
-            // 或顶栏上方——不依赖系统 inset 的消费时机，真机/登录页表现一致可靠。
-            Spacer(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .windowInsetsTopHeight(WindowInsets.statusBars)
-                    .background(EmbedBarBg)
-            )
+            // 注意：本页 decorFitsSystemWindows=true，系统已自动把内容下移到状态栏「下方」，
+            // 且状态栏本身已染成 EmbedBarBg（见原生窗口适配 DisposableEffect）。因此这里
+            // 不能再额外补一段「状态栏高度」的占位条，否则会在顶部多叠加一整个状态栏高度的
+            // 深色块（顶栏看着变细了、总高度却没降）。直接让纤细顶栏紧贴系统状态栏下方即可。
             // 纤细顶栏：在 Column 布局流内，固定在状态栏正下方、网页内容区「上方」。
             // 因为它占据自己的布局高度（而非覆盖在网页上），WebView 从它「下方」开始，
             // 网页（含 Copilot 自身顶部菜单）永远不会被遮挡。固定显示、无高度动画，避免
