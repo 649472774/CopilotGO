@@ -1,6 +1,8 @@
 package com.tongxie.copilotgo.ui.viewmodel
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tongxie.copilotgo.data.update.ApkInstaller
@@ -35,12 +37,21 @@ class UpdateViewModel(
 
     private var autoChecked = false
 
-    /** 冷启动自动检查：每个进程只跑一次，且尊重「忽略此版本」。 */
+    /**
+     * 冷启动自动检查：每个进程只触发一次，且只有超过间隔才联网，避免单次会话内反复检查。
+     */
     fun autoCheckOnce() {
         if (autoChecked) return
         autoChecked = true
+        val now = System.currentTimeMillis()
+        if (now - prefs.lastCheckAt < CHECK_INTERVAL_MS) {
+            _state.value = State.Idle
+            return
+        }
         check(manual = false)
     }
+
+    fun autoCheckIfDue() = autoCheckOnce()
 
     fun check(manual: Boolean) {
         // 下载中 / 已下载时不重复检查
@@ -48,11 +59,15 @@ class UpdateViewModel(
         if (s is State.Downloading || s is State.Downloaded) return
         _state.value = State.Checking
         viewModelScope.launch {
-            when (val r = checker.check()) {
+            val r = checker.check()
+            prefs.lastCheckAt = System.currentTimeMillis()
+            when (r) {
                 is UpdateChecker.CheckResult.Available -> {
                     val skipped = prefs.skippedVersion
                     if (!manual && skipped == r.info.versionName) {
                         _state.value = State.Idle
+                    } else if (!manual && prefs.wifiAutoDownload && isOnWifi()) {
+                        startDownload(r.info)
                     } else {
                         _state.value = State.Available(r.info)
                     }
@@ -112,5 +127,18 @@ class UpdateViewModel(
 
     fun dismiss() {
         if (_state.value !is State.Downloading) _state.value = State.Idle
+    }
+
+    private fun isOnWifi(): Boolean = runCatching {
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return@runCatching false
+        val network = cm.activeNetwork ?: return@runCatching false
+        val caps = cm.getNetworkCapabilities(network) ?: return@runCatching false
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }.getOrDefault(false)
+
+    companion object {
+        private const val CHECK_INTERVAL_MS = 6L * 60 * 60 * 1000
     }
 }

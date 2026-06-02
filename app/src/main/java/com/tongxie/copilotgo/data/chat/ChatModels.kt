@@ -111,5 +111,6 @@ data class Session(
     val messages: MutableList<UiMessage> = mutableListOf(),
     val createdAt: Long = System.currentTimeMillis(),
     var updatedAt: Long = System.currentTimeMillis(),
+    var pinned: Boolean = false,
     var revision: Long = 0
 )

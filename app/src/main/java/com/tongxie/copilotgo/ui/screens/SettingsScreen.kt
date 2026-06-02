@@ -24,18 +24,24 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.tongxie.copilotgo.BuildConfig
 import com.tongxie.copilotgo.data.auth.AuthState
 import com.tongxie.copilotgo.data.proxy.ProxyConfig
+import com.tongxie.copilotgo.data.update.UpdatePrefs
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ProxyViewModel
 
@@ -52,6 +58,11 @@ fun SettingsScreen(
 ) {
     val authState by authVm.state.collectAsState()
     val proxyConfig by proxyVm.config.collectAsState()
+    val context = LocalContext.current
+    val updatePrefs = remember(context) {
+        UpdatePrefs(context.applicationContext)
+    }
+    var wifiAutoDownload by remember { mutableStateOf(updatePrefs.wifiAutoDownload) }
 
     val accountSummary = when (val s = authState) {
         is AuthState.LoggedIn -> "已登录 · ${s.sku ?: "未知 SKU"}"
@@ -96,6 +107,17 @@ fun SettingsScreen(
                 onClick = onOpenProxy
             )
 
+            SettingsSwitchCard(
+                icon = Icons.Filled.Settings,
+                title = "仅 Wi-Fi 自动下载更新",
+                subtitle = "发现新版本时仅在未计费 Wi-Fi 下自动下载",
+                checked = wifiAutoDownload,
+                onCheckedChange = { enabled ->
+                    wifiAutoDownload = enabled
+                    updatePrefs.wifiAutoDownload = enabled
+                }
+            )
+
             SettingsMenuCard(
                 icon = Icons.Filled.Folder,
                 title = "存储",
@@ -110,6 +132,43 @@ fun SettingsScreen(
                 onClick = onOpenAbout
             )
         }
+    }
+}
+
+@Composable
+private fun SettingsSwitchCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        ListItem(
+            headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
+            supportingContent = {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            leadingContent = {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            },
+            trailingContent = {
+                Switch(checked = checked, onCheckedChange = onCheckedChange)
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+        )
     }
 }
 

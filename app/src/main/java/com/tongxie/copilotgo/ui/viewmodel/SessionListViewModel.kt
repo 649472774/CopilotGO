@@ -97,6 +97,15 @@ class SessionListViewModel(
         viewModelScope.launch { store.delete(id) }
     }
 
+    fun togglePin(id: String) {
+        val pinned = sessions.value.firstOrNull { it.id == id }?.pinned ?: return
+        viewModelScope.launch { store.setPinned(id, !pinned) }
+    }
+
+    fun rename(id: String, title: String) {
+        viewModelScope.launch { store.rename(id, title.trim()) }
+    }
+
     fun reload() {
         viewModelScope.launch { store.load() }
     }

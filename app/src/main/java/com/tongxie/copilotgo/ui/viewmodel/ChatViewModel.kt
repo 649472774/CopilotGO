@@ -31,4 +31,13 @@ class ChatViewModel(
     fun stopStreaming() = center.stop(sessionId)
 
     fun clearError() = center.clearError(sessionId)
+
+    fun retryLast() = center.retryLast(sessionId)
+
+    fun regenerate(assistantMsgId: String) = center.regenerate(sessionId, assistantMsgId)
+
+    fun deleteMessage(msgId: String) = center.deleteMessage(sessionId, msgId)
+
+    fun editAndResend(msgId: String, newText: String) =
+        center.editAndResend(sessionId, msgId, newText)
 }

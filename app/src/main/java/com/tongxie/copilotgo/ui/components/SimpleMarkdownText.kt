@@ -1,21 +1,35 @@
 package com.tongxie.copilotgo.ui.components
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -63,6 +77,11 @@ fun SimpleMarkdownText(
         Color(0xFFE0E0E0)
     }
     val textColor = MaterialTheme.colorScheme.onSurface
+    val codeHeaderBg = if (codeBg.luminanceSimple() < 0.5f) {
+        Color(0xFF252525)
+    } else {
+        Color(0xFFE2E2E2)
+    }
 
     // 注意：不要在这里 fillMaxWidth()，否则会把外层气泡（widthIn(max=320.dp)）撑到上限，
     // 导致 user 短消息也变成一个超宽矩形。让 Column wrap content，气泡自适应内容宽度。
@@ -87,16 +106,68 @@ fun SimpleMarkdownText(
                     )
                 }
                 is MdBlock.CodeBlock -> {
+                    val context = LocalContext.current
+                    val clipboardManager = LocalClipboardManager.current
+                    var wrap by remember { mutableStateOf(false) }
+                    val horizontalScrollState = rememberScrollState()
+                    val highlightedCode = remember(block.code, wrap, codeBg) {
+                        buildCodeAnnotated(block.code, codeBg)
+                    }
+                    val bodyModifier = Modifier
+                        .background(codeBg)
+                        .padding(8.dp)
+                        .then(
+                            if (wrap) Modifier.fillMaxWidth()
+                            else Modifier.horizontalScroll(horizontalScrollState)
+                        )
+
                     Column(
                         modifier = Modifier
                             .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(codeBg)
-                            .padding(8.dp)
-                            .horizontalScroll(rememberScrollState())
                     ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(codeHeaderBg)
+                                .padding(start = 8.dp, end = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = block.lang.ifBlank { "code" },
+                                modifier = Modifier.weight(1f),
+                                style = style.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                    color = textColor.copy(alpha = 0.65f)
+                                )
+                            )
+                            TextButton(onClick = { wrap = !wrap }) {
+                                Text(
+                                    text = if (wrap) "不换行" else "换行",
+                                    fontSize = 12.sp,
+                                    color = textColor.copy(alpha = 0.75f)
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(block.code))
+                                    Toast.makeText(context, "已复制代码", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "复制代码",
+                                    tint = textColor.copy(alpha = 0.75f)
+                                )
+                            }
+                        }
                         Text(
-                            text = block.code,
+                            text = highlightedCode,
+                            modifier = bodyModifier,
+                            softWrap = wrap,
                             style = style.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
@@ -238,6 +309,79 @@ private sealed class MdBlock {
     data class Paragraph(val text: String) : MdBlock()
     data class LatexDisplay(val latex: String) : MdBlock()
     object Blank : MdBlock()
+}
+
+private fun buildCodeAnnotated(code: String, codeBg: Color): AnnotatedString {
+    return runCatching {
+        val darkCode = codeBg.luminanceSimple() < 0.5f
+        val keywordColor = if (darkCode) Color(0xFFC792EA) else Color(0xFF5E35B1)
+        val stringColor = if (darkCode) Color(0xFFC3E88D) else Color(0xFF2E7D32)
+        val commentColor = if (darkCode) Color(0xFF9E9E9E) else Color(0xFF757575)
+        val keywords = setOf(
+            "for", "while", "if", "else", "return", "fun", "val", "var", "def", "class",
+            "function", "const", "let", "import", "public", "private", "void", "int", "String",
+            "true", "false", "null", "None"
+        )
+
+        buildAnnotatedString {
+            var i = 0
+            while (i < code.length) {
+                val c = code[i]
+                when {
+                    c == '/' && i + 1 < code.length && code[i + 1] == '/' -> {
+                        val end = code.indexOf('\n', i).let { if (it == -1) code.length else it }
+                        withStyle(SpanStyle(color = commentColor, fontStyle = FontStyle.Italic)) {
+                            append(code.substring(i, end))
+                        }
+                        i = end
+                    }
+                    c == '#' -> {
+                        val end = code.indexOf('\n', i).let { if (it == -1) code.length else it }
+                        withStyle(SpanStyle(color = commentColor, fontStyle = FontStyle.Italic)) {
+                            append(code.substring(i, end))
+                        }
+                        i = end
+                    }
+                    c == '\'' || c == '"' -> {
+                        val quote = c
+                        var end = i + 1
+                        var escaped = false
+                        while (end < code.length) {
+                            val ch = code[end]
+                            if (!escaped && ch == quote) {
+                                end++
+                                break
+                            }
+                            escaped = !escaped && ch == '\\'
+                            if (ch != '\\') escaped = false
+                            end++
+                        }
+                        withStyle(SpanStyle(color = stringColor)) {
+                            append(code.substring(i, end.coerceAtMost(code.length)))
+                        }
+                        i = end.coerceAtMost(code.length)
+                    }
+                    c.isLetter() || c == '_' -> {
+                        var end = i + 1
+                        while (end < code.length && (code[end].isLetterOrDigit() || code[end] == '_')) end++
+                        val word = code.substring(i, end)
+                        if (word in keywords) {
+                            withStyle(SpanStyle(color = keywordColor, fontWeight = FontWeight.SemiBold)) {
+                                append(word)
+                            }
+                        } else {
+                            append(word)
+                        }
+                        i = end
+                    }
+                    else -> {
+                        append(c)
+                        i++
+                    }
+                }
+            }
+        }
+    }.getOrElse { AnnotatedString(code) }
 }
 
 private fun parseMarkdownBlocks(markdown: String): List<MdBlock> {

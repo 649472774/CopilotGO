@@ -220,12 +220,27 @@ class ChatStreamCenter(
         bump(id)
         saveSnap(id, s)
 
-        sendingFlow.value = true
-        errorFlow.value = null
-
         // Bug 13 修复：vision 与否只看 **本次** 请求是否带图，不再扫历史。
         // 历史里有图但本次没图 → 走纯文本 ChatRequest，避免把含图历史发给纯文本模型时被拒。
         val isVisionThisTurn = imageUrls.isNotEmpty()
+        launchStream(id, s, assistantId, isVisionThisTurn, sendingFlow, errorFlow)
+    }
+
+    /**
+     * 启动一个 SSE 流任务：以 s.messages 末尾的 assistant 占位（assistantId）为输出目标，
+     * 历史取 `dropLast(1)`。被 [send] / [regenerate] / [retryLast] / [editAndResend] 复用。
+     * 调用前请确保占位 assistant 已经是 messages 的最后一条。
+     */
+    private fun launchStream(
+        id: String,
+        s: Session,
+        assistantId: String,
+        isVisionThisTurn: Boolean,
+        sendingFlow: MutableStateFlow<Boolean>,
+        errorFlow: MutableStateFlow<String?>
+    ) {
+        sendingFlow.value = true
+        errorFlow.value = null
 
         jobs[id] = scope.launch {
             try {
@@ -344,6 +359,90 @@ class ChatStreamCenter(
 
     fun stop(id: String) {
         jobs[id]?.cancel()
+    }
+
+    /**
+     * 重新生成指定 assistant 消息：截断到该消息之前，复用其对应的 user 请求重发一轮。
+     * （feat4/feat5：重试 / 重新生成）
+     */
+    fun regenerate(id: String, assistantMsgId: String) {
+        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
+        if (sendingFlow.value) return
+        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
+        scope.launch {
+            val s = sessionFlows[id]?.value ?: return@launch
+            val idx = s.messages.indexOfFirst { it.id == assistantMsgId }
+            if (idx < 0) return@launch
+            val userIdx = (idx - 1 downTo 0).firstOrNull { s.messages[it].role == "user" } ?: return@launch
+            val userMsg = s.messages[userIdx]
+            // 删除该 user 之后的所有消息（含旧 assistant 回复）
+            while (s.messages.size > userIdx + 1) s.messages.removeAt(s.messages.size - 1)
+            val assistantId = UUID.randomUUID().toString()
+            s.messages.add(UiMessage(id = assistantId, role = "assistant", content = "", isStreaming = true))
+            bump(id)
+            saveSnap(id, s)
+            launchStream(id, s, assistantId, userMsg.imageUrls.isNotEmpty(), sendingFlow, errorFlow)
+        }
+    }
+
+    /** 重试最后一轮：重新生成最后一条 assistant 回复；若没有则对最后一条 user 触发一轮。 */
+    fun retryLast(id: String) {
+        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
+        if (sendingFlow.value) return
+        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
+        scope.launch {
+            val s = sessionFlows[id]?.value ?: return@launch
+            val lastAssistant = s.messages.lastOrNull { it.role == "assistant" }
+            if (lastAssistant != null) {
+                regenerate(id, lastAssistant.id)
+                return@launch
+            }
+            val lastUserIdx = s.messages.indexOfLast { it.role == "user" }
+            if (lastUserIdx < 0) return@launch
+            val userMsg = s.messages[lastUserIdx]
+            while (s.messages.size > lastUserIdx + 1) s.messages.removeAt(s.messages.size - 1)
+            val assistantId = UUID.randomUUID().toString()
+            s.messages.add(UiMessage(id = assistantId, role = "assistant", content = "", isStreaming = true))
+            bump(id)
+            saveSnap(id, s)
+            launchStream(id, s, assistantId, userMsg.imageUrls.isNotEmpty(), sendingFlow, errorFlow)
+        }
+    }
+
+    /** 删除单条消息（feat5）。流式进行中也允许删除非当前流的历史消息。 */
+    fun deleteMessage(id: String, msgId: String) {
+        scope.launch {
+            val s = sessionFlows[id]?.value ?: return@launch
+            val removed = s.messages.removeAll { it.id == msgId }
+            if (removed) {
+                bump(id)
+                saveSnap(id, s)
+            }
+        }
+    }
+
+    /**
+     * 编辑某条 user 消息内容并重发（feat5）：替换内容、截断其后所有消息、追加新 assistant 占位并重新流式。
+     */
+    fun editAndResend(id: String, msgId: String, newText: String) {
+        val trimmed = newText.trim()
+        if (trimmed.isEmpty()) return
+        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
+        if (sendingFlow.value) return
+        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
+        scope.launch {
+            val s = sessionFlows[id]?.value ?: return@launch
+            val idx = s.messages.indexOfFirst { it.id == msgId && it.role == "user" }
+            if (idx < 0) return@launch
+            val old = s.messages[idx]
+            s.messages[idx] = old.copy(content = trimmed)
+            while (s.messages.size > idx + 1) s.messages.removeAt(s.messages.size - 1)
+            val assistantId = UUID.randomUUID().toString()
+            s.messages.add(UiMessage(id = assistantId, role = "assistant", content = "", isStreaming = true))
+            bump(id)
+            saveSnap(id, s)
+            launchStream(id, s, assistantId, old.imageUrls.isNotEmpty(), sendingFlow, errorFlow)
+        }
     }
 
     private fun friendlyError(e: Throwable): String {

@@ -15,12 +15,17 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,7 +41,12 @@ import com.tongxie.copilotgo.ui.theme.UserBubbleDark
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MessageBubble(message: UiMessage) {
+fun MessageBubble(
+    message: UiMessage,
+    onRegenerate: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null
+) {
     val isUser = message.role == "user"
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val bubbleColor = if (isUser) {
@@ -58,6 +68,7 @@ fun MessageBubble(message: UiMessage) {
     }
 
     val interactionSource = remember { MutableInteractionSource() }
+    var menuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -93,15 +104,41 @@ fun MessageBubble(message: UiMessage) {
                 .widthIn(max = 320.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(bubbleColor)
-                // 长按复制（user / assistant 都支持），短按无操作（不要 ripple 闪烁）
+                // 长按弹出操作菜单（复制 / 重新生成 / 编辑重发 / 删除），短按无操作
                 .combinedClickable(
                     interactionSource = interactionSource,
                     indication = null,
                     onClick = {},
-                    onLongClick = { copyMessage() }
+                    onLongClick = { menuOpen = true }
                 )
                 .padding(12.dp)
         ) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                if (message.content.isNotEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("复制") },
+                        onClick = { menuOpen = false; copyMessage() }
+                    )
+                }
+                if (!isUser && onRegenerate != null) {
+                    DropdownMenuItem(
+                        text = { Text("重新生成") },
+                        onClick = { menuOpen = false; onRegenerate() }
+                    )
+                }
+                if (isUser && onEdit != null) {
+                    DropdownMenuItem(
+                        text = { Text("编辑重发") },
+                        onClick = { menuOpen = false; onEdit() }
+                    )
+                }
+                if (onDelete != null) {
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        onClick = { menuOpen = false; onDelete() }
+                    )
+                }
+            }
             if (message.content.isEmpty() && message.isStreaming) {
                 TypingDots()
             } else {

@@ -1,7 +1,11 @@
 package com.tongxie.copilotgo.ui.screens
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.speech.RecognizerIntent
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,8 +29,10 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -37,8 +43,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -79,11 +87,28 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     var input by remember { mutableStateOf("") }
+    // feat5：编辑某条 user 消息并重发（编辑对话框状态）
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var editText by remember { mutableStateOf("") }
     val attachments = remember { mutableStateListOf<Pair<String, String>>() } // name -> text content
     // 图片：name -> data URI(base64)
     val imageItems = remember { mutableStateListOf<Pair<String, String>>() }
     // 给 picker callback 用：切 IO 线程做 readBytes / base64
     val scope = rememberCoroutineScope()
+
+    // feat7：系统语音识别（RecognizerIntent，无需 RECORD_AUDIO 权限），结果文本追加到输入框
+    val voiceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spoken = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+            if (!spoken.isNullOrBlank()) {
+                input = if (input.isBlank()) spoken else input.trimEnd() + " " + spoken
+            }
+        }
+    }
 
     val pickFile = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -130,7 +155,13 @@ fun ChatScreen(
 
     LaunchedEffect(error) {
         error?.let {
-            snackbarHost.showSnackbar(it)
+            // feat4：错误提示带「重试」操作，点击后重发最后一轮
+            val res = snackbarHost.showSnackbar(
+                message = it,
+                actionLabel = "重试",
+                withDismissAction = true
+            )
+            if (res == SnackbarResult.ActionPerformed) viewModel.retryLast()
             viewModel.clearError()
         }
     }
@@ -249,7 +280,16 @@ fun ChatScreen(
                         .fillMaxWidth()
                 ) {
                     items(s.messages, key = { it.id }) { msg ->
-                        MessageBubble(message = msg)
+                        MessageBubble(
+                            message = msg,
+                            onRegenerate = if (msg.role == "assistant" && !msg.isStreaming) {
+                                { viewModel.regenerate(msg.id) }
+                            } else null,
+                            onEdit = if (msg.role == "user") {
+                                { editingId = msg.id; editText = msg.content }
+                            } else null,
+                            onDelete = { viewModel.deleteMessage(msg.id) }
+                        )
                     }
                     // 底部锚点（1px 透明），scrollToItem(anchorIndex) 把它对齐到视口顶部
                     // 等价于把最后一条消息整体推到视口底部，避免长消息被弹到顶部。
@@ -302,6 +342,22 @@ fun ChatScreen(
                 IconButton(onClick = { pickImages.launch("image/*") }) {
                     Icon(Icons.Default.Image, contentDescription = "图片")
                 }
+                IconButton(onClick = {
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(
+                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                        )
+                        putExtra(RecognizerIntent.EXTRA_PROMPT, "请说话…")
+                    }
+                    try {
+                        voiceLauncher.launch(intent)
+                    } catch (e: ActivityNotFoundException) {
+                        scope.launch { snackbarHost.showSnackbar("设备不支持语音输入") }
+                    }
+                }) {
+                    Icon(Icons.Default.Mic, contentDescription = "语音输入")
+                }
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
@@ -334,6 +390,36 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    // feat5：编辑 user 消息并重发
+    if (editingId != null) {
+        AlertDialog(
+            onDismissRequest = { editingId = null },
+            title = { Text("编辑并重发") },
+            text = {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { editText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 8
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val id = editingId
+                        val t = editText.trim()
+                        editingId = null
+                        if (id != null && t.isNotEmpty()) viewModel.editAndResend(id, t)
+                    },
+                    enabled = editText.isNotBlank()
+                ) { Text("重发") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingId = null }) { Text("取消") }
+            }
+        )
     }
 }
 
