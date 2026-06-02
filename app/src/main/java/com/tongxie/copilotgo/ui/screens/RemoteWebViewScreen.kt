@@ -392,8 +392,13 @@ fun RemoteWebViewScreen(
         // 网页内容铺满窗口的内容区。系统栏由窗口直接着色（深色一体化），
         // 键盘弹出/收起由 OS 原生缩放窗口处理，Chromium 自动把焦点输入框滚入可见区——
         // 平滑、即时、不卡顿，且位置正确。
+        // 关键：WebView 容器必须与悬浮顶栏用「相同的状态栏内边距」，两层顶部才会对齐。
+        // 否则 WebView 会一直铺到状态栏正下方，而顶栏被下推，二者之间露出一条网页内容
+        // （表现为"浏览器内容渲染到栏的上面"）。这是静态 inset，不随键盘动画变化，无卡顿。
         Box(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
         ) {
             AndroidView(
                 factory = { swipeRefresh },
