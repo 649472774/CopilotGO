@@ -171,6 +171,7 @@ fun RemoteWebViewScreen(
             firstLoad = false
             canGoBack = v.canGoBack()
             applyImmersive(v, immersive)
+            applyEnterAsNewline(v)
         }
         RemoteWebHolder.onHistory = { v -> canGoBack = v.canGoBack() }
         RemoteWebHolder.onMainError = { msg ->
@@ -180,8 +181,11 @@ fun RemoteWebViewScreen(
         }
         RemoteWebHolder.onProgress = { p ->
             progress = p / 100f
-            // 进度推进时尽早注入 CSS，减少顶栏闪现
-            if (p >= 60) applyImmersive(webView, immersive)
+            // 进度推进时尽早注入 CSS 与回车改换行，减少顶栏闪现并尽快让换行键生效
+            if (p >= 60) {
+                applyImmersive(webView, immersive)
+                applyEnterAsNewline(webView)
+            }
         }
         RemoteWebHolder.onFileChooser = fc@{ callback, intent ->
             pendingFileCallback.value?.onReceiveValue(null)
@@ -306,6 +310,119 @@ fun RemoteWebViewScreen(
                     .windowInsetsTopHeight(WindowInsets.statusBars)
                     .background(EmbedBarBg)
             )
+            // 纤细顶栏：在 Column 布局流内，固定在状态栏正下方、网页内容区「上方」。
+            // 因为它占据自己的布局高度（而非覆盖在网页上），WebView 从它「下方」开始，
+            // 网页（含 Copilot 自身顶部菜单）永远不会被遮挡。固定显示、无高度动画，避免
+            // WebView 反复重排造成的卡顿。错误页时隐藏顶栏（保持与原行为一致）。
+            if (loadError == null) {
+                Surface(color = EmbedBarBg) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(40.dp)
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable { onBack() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "退出到首页",
+                                tint = EmbedOnBg,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = EmbedOnBg,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 8.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable { menuOpen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "更多",
+                                tint = EmbedOnBg,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("刷新") },
+                                    onClick = {
+                                        menuOpen = false
+                                        webView.reload()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("回到 Copilot 首页") },
+                                    onClick = {
+                                        menuOpen = false
+                                        webView.loadUrl(homeUrl)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (immersive) "沉浸模式：开" else "沉浸模式：关") },
+                                    onClick = {
+                                        menuOpen = false
+                                        immersive = !immersive
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (desktopMode) "切换到移动版" else "切换到桌面版") },
+                                    onClick = {
+                                        menuOpen = false
+                                        desktopMode = !desktopMode
+                                        webView.settings.userAgentString =
+                                            if (desktopMode) Constants.DESKTOP_USER_AGENT else null
+                                        webView.reload()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("用系统浏览器打开") },
+                                    onClick = {
+                                        menuOpen = false
+                                        val url = webView.url ?: homeUrl
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                            )
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("退出网页登录（清 cookie）") },
+                                    onClick = {
+                                        menuOpen = false
+                                        showLogoutDialog = true
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                if (isLoading && !firstLoad && progress > 0f && progress < 1f) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        color = EmbedOnBg,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -374,131 +491,6 @@ fun RemoteWebViewScreen(
                     }
                 }
             }
-            }
-        }
-
-        // 自动隐藏的悬浮顶栏：作为根层覆盖物，用与上方状态栏占位条等高的 windowInsetsPadding
-        // 下移，正好落在 WebView 内容区顶部（不会盖到状态栏，也不会在栏上方露出网页）。
-        // 向下滚动收起、向上滚动或到顶展开；覆盖在网页之上，开合不挤压 WebView，无重排/跳动。
-        AnimatedVisibility(
-            visible = barVisible && loadError == null,
-            enter = expandVertically() + slideInVertically { -it },
-            exit = shrinkVertically() + slideOutVertically { -it },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .windowInsetsPadding(WindowInsets.statusBars)
-        ) {
-            Column {
-                // 纤细顶栏（44dp，比 Material 默认 64dp 更省空间）。
-                // 左上角为「退出」：始终直接回首页（不走网页历史，避免每次重进还要重选 session）。
-                Surface(color = EmbedBarBg) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .clickable { onBack() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Filled.Close,
-                                contentDescription = "退出到首页",
-                                tint = EmbedOnBg,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = EmbedOnBg,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(start = 8.dp)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .clickable { menuOpen = true },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Filled.MoreVert,
-                                contentDescription = "更多",
-                                tint = EmbedOnBg,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("刷新") },
-                                    onClick = {
-                                        menuOpen = false
-                                        webView.reload()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("回到 Copilot 首页") },
-                                    onClick = {
-                                        menuOpen = false
-                                        webView.loadUrl(homeUrl)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (immersive) "沉浸模式：开" else "沉浸模式：关") },
-                                    onClick = {
-                                        menuOpen = false
-                                        immersive = !immersive
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (desktopMode) "切换到移动版" else "切换到桌面版") },
-                                    onClick = {
-                                        menuOpen = false
-                                        desktopMode = !desktopMode
-                                        webView.settings.userAgentString =
-                                            if (desktopMode) Constants.DESKTOP_USER_AGENT else null
-                                        webView.reload()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("用系统浏览器打开") },
-                                    onClick = {
-                                        menuOpen = false
-                                        val url = webView.url ?: homeUrl
-                                        runCatching {
-                                            context.startActivity(
-                                                Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                }
-                                            )
-                                        }
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("退出网页登录（清 cookie）") },
-                                    onClick = {
-                                        menuOpen = false
-                                        showLogoutDialog = true
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-                // 站内导航时的细进度条；首屏用品牌 Loading
-                if (isLoading && !firstLoad && progress > 0f && progress < 1f) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        color = EmbedOnBg,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
             }
         }
     }
@@ -694,6 +686,46 @@ private fun applyImmersive(webView: WebView, enabled: Boolean) {
           } else if(ex){
             ex.parentNode.removeChild(ex);
           }
+        })();
+    """.trimIndent()
+    runCatching { webView.evaluateJavascript(js, null) }
+}
+
+/**
+ * 让软键盘「回车/换行」键插入换行，而不是直接发送消息。
+ * 在 window 捕获阶段（最先于页面自身的监听）拦截无修饰键的 Enter：
+ * - textarea：在光标处手动插入 "\n" 并派发 input 事件；
+ * - contenteditable（富文本编辑器，如 Copilot 输入框）：execCommand('insertLineBreak') 触发软换行。
+ * 发送改由页面自带的「发送」按钮完成。监听只绑定一次（按文档去重），SPA 切换页面也持续有效。
+ */
+private fun applyEnterAsNewline(webView: WebView) {
+    val js = """
+        (function(){
+          if (window.__cgEnterNewline) return;
+          window.__cgEnterNewline = true;
+          window.addEventListener('keydown', function(e){
+            if (e.key !== 'Enter' && e.keyCode !== 13) return;
+            if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+            var el = e.target;
+            if (!el) return;
+            var tag = (el.tagName || '').toLowerCase();
+            var editable = !!el.isContentEditable;
+            if (tag !== 'textarea' && !editable) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+            if (tag === 'textarea') {
+              var start = el.selectionStart, end = el.selectionEnd, v = el.value || '';
+              el.value = v.slice(0, start) + '\n' + v.slice(end);
+              el.selectionStart = el.selectionEnd = start + 1;
+              try { el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertLineBreak'})); }
+              catch (err) { el.dispatchEvent(new Event('input', {bubbles:true})); }
+            } else {
+              var ok = false;
+              try { ok = document.execCommand('insertLineBreak'); } catch (err) {}
+              if (!ok) { try { document.execCommand('insertText', false, '\n'); } catch (err2) {} }
+            }
+          }, true);
         })();
     """.trimIndent()
     runCatching { webView.evaluateJavascript(js, null) }
