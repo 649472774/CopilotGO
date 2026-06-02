@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -30,12 +31,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -91,7 +89,8 @@ private val EmbedOnBgDim = Color(0xFF8B949E)
  * - 固定品牌标题「Copilot」，不随网页 <title> 抖动（浏览器感的最大来源）。
  * - 顶栏自动隐藏：向下滚动收起、向上滚动/到顶展开，像主流 App 的沉浸阅读，不再占一大块。
  * - 深色一体化：顶/底栏与系统栏区域统一深色，消除浅色主题下刺眼的白边。
- * - 键盘自适配：内容区 imePadding，弹出输入法时网页上移，输入内容始终可见。
+ * - 键盘自适配：本页启用系统原生 ADJUST_RESIZE，弹出输入法时 OS 平滑缩放窗口，
+ *   Chromium 自动把焦点输入框滚入可见区——不卡顿、不错位（不再用 Compose 逐帧 imePadding）。
  * - 沉浸模式：注入 CSS 隐藏 GitHub 全局顶栏/页脚，只留 Copilot 主体（可在菜单关闭）。
  * - 下拉刷新（SwipeRefreshLayout），原生手势。首屏品牌化 Loading，消除白屏闪烁。
  * - 登录态：CookieManager 持久化（含第三方 cookie），onPause/销毁时 flush 落盘。
@@ -295,17 +294,40 @@ fun RemoteWebViewScreen(
         applyImmersive(webView, immersive)
     }
 
-    // 本页为深色一体化：把系统状态栏图标改为浅色（在深色背景上可读），离开时还原。
+    // 本页改用「系统原生窗口适配」：decorFitsSystemWindows=true + ADJUST_RESIZE，
+    // 让 OS 在键盘弹出时一次性平滑缩放窗口、由 Chromium 自动把输入框滚入可见区，
+    // 彻底避免 Compose 逐帧 imePadding 触发 WebView 重排导致的严重卡顿（动画卡 5 秒、错位）。
+    // 同时直接给系统状态栏/导航栏上深色，保持一体化观感。离开本页时全部还原。
     DisposableEffect(Unit) {
         val window = (context as? android.app.Activity)?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, view) }
-        val previousLight = controller?.isAppearanceLightStatusBars
+        val previousLightStatus = controller?.isAppearanceLightStatusBars
+        val previousLightNav = controller?.isAppearanceLightNavigationBars
+        @Suppress("DEPRECATION") val previousStatusColor = window?.statusBarColor
+        @Suppress("DEPRECATION") val previousNavColor = window?.navigationBarColor
+        val previousSoftInput = window?.attributes?.softInputMode
+
+        if (window != null) {
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+            @Suppress("DEPRECATION") run { window.statusBarColor = EmbedBarBg.toArgb() }
+            @Suppress("DEPRECATION") run { window.navigationBarColor = EmbedBg.toArgb() }
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
         controller?.isAppearanceLightStatusBars = false
         controller?.isAppearanceLightNavigationBars = false
+
         onDispose {
-            if (previousLight != null) {
-                controller.isAppearanceLightStatusBars = previousLight
-                controller.isAppearanceLightNavigationBars = previousLight
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                @Suppress("DEPRECATION") run {
+                    if (previousStatusColor != null) window.statusBarColor = previousStatusColor
+                    if (previousNavColor != null) window.navigationBarColor = previousNavColor
+                }
+                if (previousSoftInput != null) window.setSoftInputMode(previousSoftInput)
+            }
+            if (controller != null) {
+                if (previousLightStatus != null) controller.isAppearanceLightStatusBars = previousLightStatus
+                if (previousLightNav != null) controller.isAppearanceLightNavigationBars = previousLightNav
             }
         }
     }
@@ -373,14 +395,11 @@ fun RemoteWebViewScreen(
             .fillMaxSize()
             .background(EmbedBg)
     ) {
-        // 网页内容：位于状态栏之下、导航栏之上、键盘之上。
-        // 系统栏/键盘区域由根 Box 的深色填充，杜绝浅色主题下的白边；
-        // 键盘弹出时 ime 与 navigationBars 取并集（max），内容上移，输入处始终可见。
+        // 网页内容铺满窗口的内容区。系统栏由窗口直接着色（深色一体化），
+        // 键盘弹出/收起由 OS 原生缩放窗口处理，Chromium 自动把焦点输入框滚入可见区——
+        // 平滑、即时、不卡顿，且位置正确。
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+            modifier = Modifier.fillMaxSize()
         ) {
             AndroidView(
                 factory = { swipeRefresh },
