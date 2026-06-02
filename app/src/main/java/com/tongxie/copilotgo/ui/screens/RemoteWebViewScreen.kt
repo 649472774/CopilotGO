@@ -25,18 +25,22 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,13 +48,11 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
@@ -115,7 +118,6 @@ fun RemoteWebViewScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var desktopMode by remember { mutableStateOf(false) }
     var immersive by remember { mutableStateOf(true) }
-    var refreshing by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var barVisible by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -264,13 +266,15 @@ fun RemoteWebViewScreen(
         }
     }
 
-    // 下拉刷新容器：包裹 WebView，原生手势刷新
+    // 容器仍用 SwipeRefreshLayout 承载 WebView，但禁用下拉刷新手势
+    // （用户反馈上滑误触刷新很烦）；刷新改由顶栏菜单「刷新」触发。
     val swipeRefresh = remember {
         SwipeRefreshLayout(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            isEnabled = false
             addView(
                 webView,
                 ViewGroup.LayoutParams(
@@ -278,18 +282,8 @@ fun RemoteWebViewScreen(
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
             )
-            setOnRefreshListener {
-                refreshing = true
-                webView.reload()
-            }
         }
     }
-
-    // 页面加载完成后停止下拉刷新的转圈
-    LaunchedEffect(isLoading) {
-        if (!isLoading) refreshing = false
-    }
-    // 沉浸模式切换时即时重注入/移除 CSS
     LaunchedEffect(immersive) {
         applyImmersive(webView, immersive)
     }
@@ -404,8 +398,7 @@ fun RemoteWebViewScreen(
             AndroidView(
                 factory = { swipeRefresh },
                 modifier = Modifier.fillMaxSize(),
-                update = { layout ->
-                    layout.isRefreshing = refreshing
+                update = {
                     webView.setBackgroundColor(bgArgb)
                 }
             )
@@ -478,82 +471,108 @@ fun RemoteWebViewScreen(
                 .windowInsetsPadding(WindowInsets.statusBars)
         ) {
             Column {
-                TopAppBar(
-                    title = { Text(title) },
-                    navigationIcon = {
-                        IconButton(onClick = {
-                            if (webView.canGoBack()) webView.goBack() else onBack()
-                        }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                // 纤细顶栏（44dp，比 Material 默认 64dp 更省空间）。
+                // 左上角为「退出」：始终直接回首页（不走网页历史，避免每次重进还要重选 session）。
+                Surface(color = EmbedBarBg) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable { onBack() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "退出到首页",
+                                tint = EmbedOnBg,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
-                    },
-                    actions = {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "更多")
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("刷新") },
-                                onClick = {
-                                    menuOpen = false
-                                    webView.reload()
-                                }
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = EmbedOnBg,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 8.dp)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable { menuOpen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "更多",
+                                tint = EmbedOnBg,
+                                modifier = Modifier.size(22.dp)
                             )
-                            DropdownMenuItem(
-                                text = { Text("回到 Copilot 首页") },
-                                onClick = {
-                                    menuOpen = false
-                                    webView.loadUrl(homeUrl)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(if (immersive) "沉浸模式：开" else "沉浸模式：关") },
-                                onClick = {
-                                    menuOpen = false
-                                    immersive = !immersive
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(if (desktopMode) "切换到移动版" else "切换到桌面版") },
-                                onClick = {
-                                    menuOpen = false
-                                    desktopMode = !desktopMode
-                                    webView.settings.userAgentString =
-                                        if (desktopMode) Constants.DESKTOP_USER_AGENT else null
-                                    webView.reload()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("用系统浏览器打开") },
-                                onClick = {
-                                    menuOpen = false
-                                    val url = webView.url ?: homeUrl
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            }
-                                        )
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("刷新") },
+                                    onClick = {
+                                        menuOpen = false
+                                        webView.reload()
                                     }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("退出网页登录（清 cookie）") },
-                                onClick = {
-                                    menuOpen = false
-                                    showLogoutDialog = true
-                                }
-                            )
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("回到 Copilot 首页") },
+                                    onClick = {
+                                        menuOpen = false
+                                        webView.loadUrl(homeUrl)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (immersive) "沉浸模式：开" else "沉浸模式：关") },
+                                    onClick = {
+                                        menuOpen = false
+                                        immersive = !immersive
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (desktopMode) "切换到移动版" else "切换到桌面版") },
+                                    onClick = {
+                                        menuOpen = false
+                                        desktopMode = !desktopMode
+                                        webView.settings.userAgentString =
+                                            if (desktopMode) Constants.DESKTOP_USER_AGENT else null
+                                        webView.reload()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("用系统浏览器打开") },
+                                    onClick = {
+                                        menuOpen = false
+                                        val url = webView.url ?: homeUrl
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                            )
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("退出网页登录（清 cookie）") },
+                                    onClick = {
+                                        menuOpen = false
+                                        showLogoutDialog = true
+                                    }
+                                )
+                            }
                         }
-                    },
-                    windowInsets = WindowInsets(0, 0, 0, 0),
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = EmbedBarBg,
-                        titleContentColor = EmbedOnBg,
-                        navigationIconContentColor = EmbedOnBg,
-                        actionIconContentColor = EmbedOnBg
-                    )
-                )
+                    }
+                }
                 // 站内导航时的细进度条；首屏用品牌 Loading
                 if (isLoading && !firstLoad && progress > 0f && progress < 1f) {
                     LinearProgressIndicator(
