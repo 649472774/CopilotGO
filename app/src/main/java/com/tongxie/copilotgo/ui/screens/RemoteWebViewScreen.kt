@@ -18,13 +18,25 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
@@ -37,7 +49,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -52,26 +63,37 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.tongxie.copilotgo.BuildConfig
 import com.tongxie.copilotgo.data.Constants
 
+// 内嵌 Copilot 的「专属深色」配色（对齐 GitHub 深色画布），与应用浅色主题无关，
+// 保证顶/底系统栏区域与网页深色内容连成一片，避免刺眼白边。
+private val EmbedBg = Color(0xFF0D1117)
+private val EmbedBarBg = Color(0xFF161B22)
+private val EmbedOnBg = Color(0xFFE6EDF3)
+private val EmbedOnBgDim = Color(0xFF8B949E)
+
 /**
  * Remote 模式：把官方 web Copilot（github.com/copilot）以「原生内嵌」的姿态呈现，
  * 而非粗糙的浏览器壳。为达到完美嵌入观感，做了以下处理（参考主流 App 内嵌 WebView 方案）：
  *
  * - 固定品牌标题「Copilot」，不随网页 <title> 抖动（浏览器感的最大来源）。
- * - 沉浸模式：注入 CSS 隐藏 GitHub 全局顶栏/页脚，只留 Copilot 主体，像一个专属页面（可在菜单关闭）。
- * - 下拉刷新（SwipeRefreshLayout），原生手势，而非工具栏一排按钮。
- * - 首次加载用品牌化全屏 Loading（主题背景 + 转圈），消除 WebView 白屏闪烁；WebView 背景同步主题色。
- * - 顶栏配色跟随 Material 主题；返回键/工具栏返回 = 能回退就回退，否则退出本页。
+ * - 顶栏自动隐藏：向下滚动收起、向上滚动/到顶展开，像主流 App 的沉浸阅读，不再占一大块。
+ * - 深色一体化：顶/底栏与系统栏区域统一深色，消除浅色主题下刺眼的白边。
+ * - 键盘自适配：内容区 imePadding，弹出输入法时网页上移，输入内容始终可见。
+ * - 沉浸模式：注入 CSS 隐藏 GitHub 全局顶栏/页脚，只留 Copilot 主体（可在菜单关闭）。
+ * - 下拉刷新（SwipeRefreshLayout），原生手势。首屏品牌化 Loading，消除白屏闪烁。
  * - 登录态：CookieManager 持久化（含第三方 cookie），onPause/销毁时 flush 落盘。
  * - 文件上传桥接、外链交系统、下载交系统、主框架错误重试。
  */
@@ -85,7 +107,8 @@ fun RemoteWebViewScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val bgArgb = MaterialTheme.colorScheme.background.toArgb()
+    val view = LocalView.current
+    val bgArgb = EmbedBg.toArgb()
 
     var progress by remember { mutableFloatStateOf(0f) }
     var isLoading by remember { mutableStateOf(true) }
@@ -95,6 +118,7 @@ fun RemoteWebViewScreen(
     var immersive by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var barVisible by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showLogoutDialog by remember { mutableStateOf(false) }
 
@@ -118,6 +142,17 @@ fun RemoteWebViewScreen(
             )
             isFocusableInTouchMode = true
             setBackgroundColor(bgArgb)
+
+            // 顶栏自动隐藏：根据滚动方向收起/展开；接近顶部时始终展开。
+            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+                val dy = scrollY - oldScrollY
+                barVisible = when {
+                    scrollY <= 4 -> true
+                    dy > 6 -> false
+                    dy < -6 -> true
+                    else -> barVisible
+                }
+            }
 
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
@@ -260,6 +295,21 @@ fun RemoteWebViewScreen(
         applyImmersive(webView, immersive)
     }
 
+    // 本页为深色一体化：把系统状态栏图标改为浅色（在深色背景上可读），离开时还原。
+    DisposableEffect(Unit) {
+        val window = (context as? android.app.Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        val previousLight = controller?.isAppearanceLightStatusBars
+        controller?.isAppearanceLightStatusBars = false
+        controller?.isAppearanceLightNavigationBars = false
+        onDispose {
+            if (previousLight != null) {
+                controller.isAppearanceLightStatusBars = previousLight
+                controller.isAppearanceLightNavigationBars = previousLight
+            }
+        }
+    }
+
     // 生命周期：转发 onPause/onResume，并在 pause 时把 cookie 落盘
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -318,8 +368,96 @@ fun RemoteWebViewScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(EmbedBg)
+    ) {
+        // 网页内容：位于状态栏之下、导航栏之上、键盘之上。
+        // 系统栏/键盘区域由根 Box 的深色填充，杜绝浅色主题下的白边；
+        // 键盘弹出时 ime 与 navigationBars 取并集（max），内容上移，输入处始终可见。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+        ) {
+            AndroidView(
+                factory = { swipeRefresh },
+                modifier = Modifier.fillMaxSize(),
+                update = { layout ->
+                    layout.isRefreshing = refreshing
+                    webView.setBackgroundColor(bgArgb)
+                }
+            )
+
+            val err = loadError
+            when {
+                err != null -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(EmbedBg)
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            err,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFFF85149)
+                        )
+                        Text(
+                            "请检查网络（github.com 是否可访问），然后重试。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = EmbedOnBgDim,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        TextButton(
+                            onClick = {
+                                loadError = null
+                                firstLoad = true
+                                webView.reload()
+                            },
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) { Text("重试") }
+                    }
+                }
+                // 首屏品牌化 Loading：深色背景 + 转圈，消除 WebView 白屏闪烁
+                firstLoad -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(EmbedBg)
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = EmbedOnBg,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Text(
+                            "正在连接 Copilot…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = EmbedOnBgDim,
+                            modifier = Modifier.padding(top = 16.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 自动隐藏的悬浮顶栏：覆盖在网页之上（不挤压 WebView，开合时无重排/跳动）。
+        // 向下滚动收起、向上滚动或到顶展开，腾出最大阅读空间。
+        AnimatedVisibility(
+            visible = barVisible && loadError == null,
+            enter = expandVertically() + slideInVertically { -it },
+            exit = shrinkVertically() + slideOutVertically { -it },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .windowInsetsPadding(WindowInsets.statusBars)
+        ) {
             Column {
                 TopAppBar(
                     title = { Text(title) },
@@ -389,83 +527,21 @@ fun RemoteWebViewScreen(
                             )
                         }
                     },
+                    windowInsets = WindowInsets(0, 0, 0, 0),
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                        containerColor = EmbedBarBg,
+                        titleContentColor = EmbedOnBg,
+                        navigationIconContentColor = EmbedOnBg,
+                        actionIconContentColor = EmbedOnBg
                     )
                 )
-                // 仅在站内导航（非首屏、非错误）时显示细进度条；首屏用品牌 Loading
+                // 站内导航时的细进度条；首屏用品牌 Loading
                 if (isLoading && !firstLoad && progress > 0f && progress < 1f) {
                     LinearProgressIndicator(
                         progress = { progress },
+                        color = EmbedOnBg,
                         modifier = Modifier.fillMaxWidth()
                     )
-                }
-            }
-        }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            AndroidView(
-                factory = { swipeRefresh },
-                modifier = Modifier.fillMaxSize(),
-                update = { layout ->
-                    layout.isRefreshing = refreshing
-                    webView.setBackgroundColor(bgArgb)
-                }
-            )
-
-            val err = loadError
-            when {
-                err != null -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            err,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Text(
-                            "请检查网络（github.com 是否可访问），然后重试。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
-                        TextButton(
-                            onClick = {
-                                loadError = null
-                                firstLoad = true
-                                webView.reload()
-                            },
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) { Text("重试") }
-                    }
-                }
-                // 首屏品牌化 Loading：主题背景 + 转圈，消除 WebView 白屏闪烁
-                firstLoad -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(36.dp))
-                        Text(
-                            "正在连接 Copilot…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(top = 16.dp)
-                        )
-                    }
                 }
             }
         }
