@@ -31,6 +31,14 @@ class ProxyViewModel(
         }
     }
 
+    fun testConfig(c: ProxyConfig) {
+        viewModelScope.launch {
+            _testState.value = TestState.Testing
+            val out = healthChecker.check(c)
+            _testState.value = TestState.Result(success = out.success, message = out.message)
+        }
+    }
+
     sealed class TestState {
         object Idle : TestState()
         object Testing : TestState()

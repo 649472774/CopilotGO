@@ -19,6 +19,12 @@ object Constants {
 
     const val APP_DATA_DIR_NAME = "CopilotGoData"
 
+    // Remote 模式：内嵌官方 web Copilot。登录态由 WebView 的 CookieManager 持久化。
+    const val REMOTE_HOME_URL = "https://github.com/copilot"
+    // 强制桌面 UA（可在 Remote 页切换），避免被路由到阉割版 m.github.com / 拿到完整功能。
+    const val DESKTOP_USER_AGENT =
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
     const val DEFAULT_MODEL = "claude-sonnet-4.5"
 
     // 注意：这些是"看起来稳定"的真实 model id。实际 picker 会动态从 /models 拉

@@ -5,8 +5,13 @@ import com.tongxie.copilotgo.data.proxy.ProxyType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import okhttp3.Authenticator as OkHttpAuthenticator
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
+import java.net.Authenticator as JavaNetAuthenticator
+import java.net.Authenticator.RequestorType
 import java.net.InetSocketAddress
+import java.net.PasswordAuthentication
 import java.net.Proxy
 
 interface HttpClientProvider {
@@ -42,6 +47,45 @@ class ProxyAwareHttpClientProvider(
                 ProxyType.SOCKS5 -> Proxy.Type.SOCKS
             }
             builder.proxy(Proxy(proxyType, InetSocketAddress(config.host, config.port)))
+
+            when (config.type) {
+                ProxyType.HTTP -> {
+                    JavaNetAuthenticator.setDefault(null)
+                    if (config.requiresAuth) {
+                        builder.proxyAuthenticator(OkHttpAuthenticator { _, response ->
+                            if (response.request.header("Proxy-Authorization") != null) {
+                                null
+                            } else {
+                                response.request.newBuilder()
+                                    .header(
+                                        "Proxy-Authorization",
+                                        Credentials.basic(config.username, config.password)
+                                    )
+                                    .build()
+                            }
+                        })
+                    }
+                }
+                ProxyType.SOCKS5 -> {
+                    if (config.requiresAuth) {
+                        // SOCKS credentials are process-global in Java; OkHttp proxyAuthenticator is HTTP-only.
+                        // Gate on RequestorType.PROXY so these creds are never handed to non-proxy requestors.
+                        JavaNetAuthenticator.setDefault(object : JavaNetAuthenticator() {
+                            override fun getPasswordAuthentication(): PasswordAuthentication? =
+                                if (requestorType == RequestorType.PROXY) {
+                                    PasswordAuthentication(config.username, config.password.toCharArray())
+                                } else {
+                                    null
+                                }
+                        })
+                    } else {
+                        JavaNetAuthenticator.setDefault(null)
+                    }
+                }
+            }
+        } else {
+            builder.proxy(Proxy.NO_PROXY)
+            JavaNetAuthenticator.setDefault(null)
         }
         return builder.build()
     }

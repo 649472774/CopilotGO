@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -160,13 +161,35 @@ fun ChatScreen(
         }
     }
 
-    // 新消息到达：恢复跟随并动画滚到底。
+    // 新消息到达：恢复跟随并滚到底。
     // Bug 7 修复：之前 key 包含 sending，导致流式结束（sending: true→false）也会触发，
     // 把用户手动上滑的位置强行拽回底部。现在只在消息条数变化时跟随。
+    // Bug 10 修复：首次进入会话用瞬时 scrollToItem（无动画）直接定位到底部，
+    // 避免从顶部快速滚到底部的可见滚动过程；后续新消息才用动画。
+    // Bug 11 修复：当最后一条气泡高度大于一屏时，首帧 LazyColumn 还没测量到该气泡完整
+    // 高度，单次 scrollToItem 会落在气泡中部。改为跨帧循环重定位，直到底部锚点完全可见，
+    // 这样 markdown / latex 等异步测量完成后仍能精确停在最底部。
+    var didInitialScroll by remember(session?.id) { mutableStateOf(false) }
     LaunchedEffect(messageCount) {
         if (messageCount > 0) {
             followBottom = true
-            listState.animateScrollToItem(anchorIndex)
+            if (!didInitialScroll) {
+                var guard = 0
+                while (guard < 12) {
+                    listState.scrollToItem(anchorIndex)
+                    withFrameNanos { }
+                    val info = listState.layoutInfo
+                    val last = info.visibleItemsInfo.lastOrNull()
+                    val atBottom = last != null &&
+                        last.index == info.totalItemsCount - 1 &&
+                        last.offset + last.size <= info.viewportEndOffset
+                    if (atBottom) break
+                    guard++
+                }
+                didInitialScroll = true
+            } else {
+                listState.animateScrollToItem(anchorIndex)
+            }
         }
     }
 

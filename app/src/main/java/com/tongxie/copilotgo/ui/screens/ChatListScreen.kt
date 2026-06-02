@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
@@ -44,7 +45,8 @@ fun ChatListScreen(
     viewModel: SessionListViewModel,
     onOpen: (String) -> Unit,
     onSettings: () -> Unit,
-    onFiles: () -> Unit
+    onFiles: () -> Unit,
+    onRemote: () -> Unit
 ) {
     val sessions by viewModel.sessions.collectAsState()
     val scope = rememberCoroutineScope()
@@ -55,6 +57,9 @@ fun ChatListScreen(
             TopAppBar(
                 title = { Text("CopilotGo") },
                 actions = {
+                    IconButton(onClick = onRemote) {
+                        Icon(Icons.Default.Cloud, contentDescription = "Remote 网页版")
+                    }
                     IconButton(onClick = onFiles) {
                         Icon(Icons.Default.Folder, contentDescription = "文件")
                     }

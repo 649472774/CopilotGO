@@ -32,6 +32,8 @@ class ProxySettingsStore(private val context: Context) {
         val KEY_TYPE = stringPreferencesKey("type")
         val KEY_HOST = stringPreferencesKey("host")
         val KEY_PORT = intPreferencesKey("port")
+        val KEY_USERNAME = stringPreferencesKey("username")
+        val KEY_PASSWORD = stringPreferencesKey("password")
     }
 
     private fun androidx.datastore.preferences.core.Preferences.toProxyConfig() = ProxyConfig(
@@ -39,7 +41,9 @@ class ProxySettingsStore(private val context: Context) {
         type = this[KEY_TYPE]?.let { runCatching { ProxyType.valueOf(it) }.getOrNull() }
             ?: ProxyType.HTTP,
         host = this[KEY_HOST] ?: "127.0.0.1",
-        port = this[KEY_PORT] ?: 7890
+        port = this[KEY_PORT] ?: 7890,
+        username = this[KEY_USERNAME] ?: "",
+        password = this[KEY_PASSWORD] ?: ""
     )
 
     // 初始用默认值（关闭状态），DataStore 加载后由 init {} 的 collect 覆盖。
@@ -64,6 +68,8 @@ class ProxySettingsStore(private val context: Context) {
             prefs[KEY_TYPE] = c.type.name
             prefs[KEY_HOST] = c.host
             prefs[KEY_PORT] = c.port
+            prefs[KEY_USERNAME] = c.username
+            prefs[KEY_PASSWORD] = c.password
         }
         _config.value = c
     }

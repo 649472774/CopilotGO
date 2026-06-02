@@ -16,6 +16,7 @@ import com.tongxie.copilotgo.ui.screens.ChatListScreen
 import com.tongxie.copilotgo.ui.screens.ChatScreen
 import com.tongxie.copilotgo.ui.screens.FilesScreen
 import com.tongxie.copilotgo.ui.screens.LoginScreen
+import com.tongxie.copilotgo.ui.screens.RemoteWebViewScreen
 import com.tongxie.copilotgo.ui.screens.SettingsAboutScreen
 import com.tongxie.copilotgo.ui.screens.SettingsAccountScreen
 import com.tongxie.copilotgo.ui.screens.SettingsProxyScreen
@@ -36,6 +37,7 @@ object Routes {
     const val SETTINGS_STORAGE = "settings/storage"
     const val SETTINGS_ABOUT = "settings/about"
     const val FILES = "files"
+    const val REMOTE = "remote"
 
     fun chat(sessionId: String) = "chat/$sessionId"
 }
@@ -73,7 +75,8 @@ fun AppNavigation(container: AppContainer) {
                 viewModel = listVm,
                 onOpen = { id -> nav.navigate(Routes.chat(id)) },
                 onSettings = { nav.navigate(Routes.SETTINGS) },
-                onFiles = { nav.navigate(Routes.FILES) }
+                onFiles = { nav.navigate(Routes.FILES) },
+                onRemote = { nav.navigate(Routes.REMOTE) }
             )
         }
         composable(Routes.CHAT) { backStackEntry ->
@@ -147,6 +150,11 @@ fun AppNavigation(container: AppContainer) {
         composable(Routes.FILES) {
             FilesScreen(
                 paths = container.paths,
+                onBack = { nav.popBackStack() }
+            )
+        }
+        composable(Routes.REMOTE) {
+            RemoteWebViewScreen(
                 onBack = { nav.popBackStack() }
             )
         }
