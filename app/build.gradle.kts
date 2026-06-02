@@ -12,8 +12,8 @@ android {
         applicationId = "com.tongxie.copilotgo"
         minSdk = 34
         targetSdk = 34
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 17
+        versionName = "0.1.16"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -81,6 +81,7 @@ dependencies {
 
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.swiperefreshlayout)
 
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)

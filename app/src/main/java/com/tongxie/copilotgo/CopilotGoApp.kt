@@ -13,6 +13,8 @@ import com.tongxie.copilotgo.data.proxy.ProxyHealthChecker
 import com.tongxie.copilotgo.data.proxy.ProxySettingsStore
 import com.tongxie.copilotgo.data.storage.AppPaths
 import com.tongxie.copilotgo.data.storage.SessionStore
+import com.tongxie.copilotgo.data.update.UpdateChecker
+import com.tongxie.copilotgo.data.update.UpdatePrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -89,6 +91,15 @@ class AppContainer(app: CopilotGoApp) {
 
     val paths = AppPaths(app)
     val sessionStore = SessionStore(paths, json)
+
+    val appContext: android.content.Context = app.applicationContext
+
+    val updatePrefs = UpdatePrefs(app)
+    val updateChecker = UpdateChecker(
+        httpProvider = httpProvider,
+        json = json,
+        currentVersionName = BuildConfig.VERSION_NAME
+    )
 
     /** Application 级单例：跨 ChatViewModel 生命周期持有 SSE 流任务。详见类注释 & AGENTS.md §27。 */
     val chatStreamCenter = ChatStreamCenter(sessionStore, chatClient)

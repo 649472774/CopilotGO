@@ -26,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -33,7 +34,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.tongxie.copilotgo.ui.components.UpdateDialog
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
+import com.tongxie.copilotgo.ui.viewmodel.UpdateViewModel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -43,6 +46,7 @@ import java.util.Locale
 @Composable
 fun ChatListScreen(
     viewModel: SessionListViewModel,
+    updateVm: UpdateViewModel,
     onOpen: (String) -> Unit,
     onSettings: () -> Unit,
     onFiles: () -> Unit,
@@ -51,6 +55,10 @@ fun ChatListScreen(
     val sessions by viewModel.sessions.collectAsState()
     val scope = rememberCoroutineScope()
     val fmt = remember { SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()) }
+
+    val updateState by updateVm.state.collectAsState()
+    LaunchedEffect(Unit) { updateVm.autoCheckOnce() }
+    UpdateDialog(state = updateState, vm = updateVm)
 
     Scaffold(
         topBar = {

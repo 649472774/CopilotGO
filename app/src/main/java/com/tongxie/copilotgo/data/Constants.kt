@@ -19,6 +19,14 @@ object Constants {
 
     const val APP_DATA_DIR_NAME = "CopilotGoData"
 
+    // 应用内更新：从 GitHub Releases 拉取最新版本。owner/repo 与发布仓库一致。
+    const val GITHUB_REPO_OWNER = "649472774"
+    const val GITHUB_REPO_NAME = "CopilotGO"
+    const val GITHUB_LATEST_RELEASE_API =
+        "https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME/releases/latest"
+    const val GITHUB_RELEASES_PAGE =
+        "https://github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME/releases/latest"
+
     // Remote 模式：内嵌官方 web Copilot。登录态由 WebView 的 CookieManager 持久化。
     const val REMOTE_HOME_URL = "https://github.com/copilot"
     // 强制桌面 UA（可在 Remote 页切换），避免被路由到阉割版 m.github.com / 拿到完整功能。

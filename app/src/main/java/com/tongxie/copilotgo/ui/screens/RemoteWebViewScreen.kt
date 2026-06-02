@@ -18,16 +18,18 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,8 +41,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,43 +52,48 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.tongxie.copilotgo.BuildConfig
 import com.tongxie.copilotgo.data.Constants
 
 /**
- * Remote 模式：内嵌官方 web Copilot（github.com/copilot）的 WebView 壳。
+ * Remote 模式：把官方 web Copilot（github.com/copilot）以「原生内嵌」的姿态呈现，
+ * 而非粗糙的浏览器壳。为达到完美嵌入观感，做了以下处理（参考主流 App 内嵌 WebView 方案）：
  *
- * 设计要点（实际可用 + 严谨）：
- * - 登录态：CookieManager 持久化（含第三方 cookie），下次进 App 自动登录；onPause flush 落盘。
- * - JS / DOM Storage 开启，SPA 才能跑；支持 pinch 缩放。
- * - 文件上传：WebChromeClient.onShowFileChooser 桥接 Compose ActivityResult，Copilot 可传附件。
- * - 导航：http(s) 留在 WebView 内（OAuth 回跳也在内完成）；其他 scheme（mailto/intent/market…）交系统。
- * - 返回键：WebView 能回退就回退，否则退出本页。
- * - 进度条 + 主框架错误重试 + 溢出菜单（刷新 / 回首页 / 桌面切换 / 外部浏览器打开 / 退出登录清 cookie）。
- * - 生命周期：onPause/onResume 转发；离开页面销毁 WebView，避免泄漏。
+ * - 固定品牌标题「Copilot」，不随网页 <title> 抖动（浏览器感的最大来源）。
+ * - 沉浸模式：注入 CSS 隐藏 GitHub 全局顶栏/页脚，只留 Copilot 主体，像一个专属页面（可在菜单关闭）。
+ * - 下拉刷新（SwipeRefreshLayout），原生手势，而非工具栏一排按钮。
+ * - 首次加载用品牌化全屏 Loading（主题背景 + 转圈），消除 WebView 白屏闪烁；WebView 背景同步主题色。
+ * - 顶栏配色跟随 Material 主题；返回键/工具栏返回 = 能回退就回退，否则退出本页。
+ * - 登录态：CookieManager 持久化（含第三方 cookie），onPause/销毁时 flush 落盘。
+ * - 文件上传桥接、外链交系统、下载交系统、主框架错误重试。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun RemoteWebViewScreen(
     onBack: () -> Unit,
-    homeUrl: String = Constants.REMOTE_HOME_URL
+    homeUrl: String = Constants.REMOTE_HOME_URL,
+    title: String = "Copilot"
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val bgArgb = MaterialTheme.colorScheme.background.toArgb()
 
-    var pageTitle by remember { mutableStateOf("Remote · Copilot") }
     var progress by remember { mutableFloatStateOf(0f) }
     var isLoading by remember { mutableStateOf(true) }
+    var firstLoad by remember { mutableStateOf(true) }
     var canGoBack by remember { mutableStateOf(false) }
     var desktopMode by remember { mutableStateOf(false) }
+    var immersive by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -108,6 +117,7 @@ fun RemoteWebViewScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             isFocusableInTouchMode = true
+            setBackgroundColor(bgArgb)
 
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
@@ -139,10 +149,8 @@ fun RemoteWebViewScreen(
                     val url = request.url
                     val scheme = url.scheme?.lowercase()
                     return if (scheme == "http" || scheme == "https") {
-                        // 站内 / OAuth 回跳都留在 WebView 里
                         false
                     } else {
-                        // mailto:, tel:, intent:, market: 等交给系统
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, url).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -160,8 +168,9 @@ fun RemoteWebViewScreen(
 
                 override fun onPageFinished(view: WebView, url: String?) {
                     isLoading = false
+                    firstLoad = false
                     canGoBack = view.canGoBack()
-                    view.title?.takeIf { it.isNotBlank() }?.let { pageTitle = it }
+                    applyImmersive(view, immersive)
                 }
 
                 override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
@@ -177,6 +186,7 @@ fun RemoteWebViewScreen(
                     if (request.isForMainFrame) {
                         loadError = "加载失败：${error.description}（错误码 ${error.errorCode}）"
                         isLoading = false
+                        firstLoad = false
                     }
                 }
             }
@@ -184,10 +194,8 @@ fun RemoteWebViewScreen(
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
                     progress = newProgress / 100f
-                }
-
-                override fun onReceivedTitle(view: WebView, title: String?) {
-                    title?.takeIf { it.isNotBlank() }?.let { pageTitle = it }
+                    // 进度推进时尽早注入 CSS，减少顶栏闪现
+                    if (newProgress >= 60) applyImmersive(view, immersive)
                 }
 
                 override fun onShowFileChooser(
@@ -195,7 +203,6 @@ fun RemoteWebViewScreen(
                     filePathCallback: ValueCallback<Array<Uri>>,
                     fileChooserParams: FileChooserParams
                 ): Boolean {
-                    // 取消上一个未完成的选择，避免回调泄漏
                     pendingFileCallback.value?.onReceiveValue(null)
                     pendingFileCallback.value = filePathCallback
                     return try {
@@ -223,6 +230,36 @@ fun RemoteWebViewScreen(
         }
     }
 
+    // 下拉刷新容器：包裹 WebView，原生手势刷新
+    val swipeRefresh = remember {
+        SwipeRefreshLayout(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(
+                webView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            setOnRefreshListener {
+                refreshing = true
+                webView.reload()
+            }
+        }
+    }
+
+    // 页面加载完成后停止下拉刷新的转圈
+    LaunchedEffect(isLoading) {
+        if (!isLoading) refreshing = false
+    }
+    // 沉浸模式切换时即时重注入/移除 CSS
+    LaunchedEffect(immersive) {
+        applyImmersive(webView, immersive)
+    }
+
     // 生命周期：转发 onPause/onResume，并在 pause 时把 cookie 落盘
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -245,11 +282,11 @@ fun RemoteWebViewScreen(
     DisposableEffect(webView) {
         onDispose {
             CookieManager.getInstance().flush()
-            // 取消挂起的文件选择回调
             pendingFileCallback.value?.onReceiveValue(null)
             pendingFileCallback.value = null
             webView.stopLoading()
             (webView.parent as? ViewGroup)?.removeView(webView)
+            (swipeRefresh.parent as? ViewGroup)?.removeView(swipeRefresh)
             webView.destroy()
         }
     }
@@ -271,6 +308,7 @@ fun RemoteWebViewScreen(
                     cm.flush()
                     WebStorage.getInstance().deleteAllData()
                     webView.clearHistory()
+                    firstLoad = true
                     webView.loadUrl(homeUrl)
                 }) { Text("清除并退出") }
             },
@@ -284,13 +322,7 @@ fun RemoteWebViewScreen(
         topBar = {
             Column {
                 TopAppBar(
-                    title = {
-                        Text(
-                            pageTitle,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
+                    title = { Text(title) },
                     navigationIcon = {
                         IconButton(onClick = {
                             if (webView.canGoBack()) webView.goBack() else onBack()
@@ -299,18 +331,29 @@ fun RemoteWebViewScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { webView.reload() }) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
-                        }
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Filled.MoreVert, contentDescription = "更多")
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
+                                text = { Text("刷新") },
+                                onClick = {
+                                    menuOpen = false
+                                    webView.reload()
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("回到 Copilot 首页") },
                                 onClick = {
                                     menuOpen = false
                                     webView.loadUrl(homeUrl)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (immersive) "沉浸模式：开" else "沉浸模式：关") },
+                                onClick = {
+                                    menuOpen = false
+                                    immersive = !immersive
                                 }
                             )
                             DropdownMenuItem(
@@ -345,9 +388,14 @@ fun RemoteWebViewScreen(
                                 }
                             )
                         }
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
-                if (isLoading && progress > 0f && progress < 1f) {
+                // 仅在站内导航（非首屏、非错误）时显示细进度条；首屏用品牌 Loading
+                if (isLoading && !firstLoad && progress > 0f && progress < 1f) {
                     LinearProgressIndicator(
                         progress = { progress },
                         modifier = Modifier.fillMaxWidth()
@@ -362,39 +410,88 @@ fun RemoteWebViewScreen(
                 .padding(padding)
         ) {
             AndroidView(
-                factory = { webView },
-                modifier = Modifier.fillMaxSize()
+                factory = { swipeRefresh },
+                modifier = Modifier.fillMaxSize(),
+                update = { layout ->
+                    layout.isRefreshing = refreshing
+                    webView.setBackgroundColor(bgArgb)
+                }
             )
 
             val err = loadError
-            if (err != null) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
-                ) {
-                    Text(
-                        err,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Text(
-                        "请检查网络（github.com 是否可访问），然后重试。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                    TextButton(
-                        onClick = {
-                            loadError = null
-                            webView.reload()
-                        },
-                        modifier = Modifier.padding(top = 8.dp)
-                    ) { Text("重试") }
+            when {
+                err != null -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            err,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            "请检查网络（github.com 是否可访问），然后重试。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        TextButton(
+                            onClick = {
+                                loadError = null
+                                firstLoad = true
+                                webView.reload()
+                            },
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) { Text("重试") }
+                    }
+                }
+                // 首屏品牌化 Loading：主题背景 + 转圈，消除 WebView 白屏闪烁
+                firstLoad -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                        Text(
+                            "正在连接 Copilot…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(top = 16.dp)
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * 沉浸模式：注入/移除一段 CSS，隐藏 GitHub 全局顶栏与页脚，让内嵌的 Copilot 像专属页面。
+ * 选择器命中失败时安全无副作用（什么都不隐藏）。
+ */
+private fun applyImmersive(webView: WebView, enabled: Boolean) {
+    val js = """
+        (function(){
+          var ID='cg-immersive-style';
+          var ex=document.getElementById(ID);
+          if(${enabled}){
+            if(!ex){
+              var s=document.createElement('style');
+              s.id=ID;
+              s.textContent='.AppHeader,header.AppHeader,.js-header-wrapper,.footer,footer.footer{display:none!important;} body{padding-top:0!important;}';
+              (document.head||document.documentElement).appendChild(s);
+            }
+          } else if(ex){
+            ex.parentNode.removeChild(ex);
+          }
+        })();
+    """.trimIndent()
+    runCatching { webView.evaluateJavascript(js, null) }
 }

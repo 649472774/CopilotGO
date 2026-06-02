@@ -26,6 +26,7 @@ import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ChatViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ProxyViewModel
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
+import com.tongxie.copilotgo.ui.viewmodel.UpdateViewModel
 
 object Routes {
     const val LOGIN = "login"
@@ -48,6 +49,12 @@ fun AppNavigation(container: AppContainer) {
 
     val authVm: AuthViewModel = viewModel(factory = SimpleVMFactory { AuthViewModel(container.authRepo) })
     val authState by authVm.state.collectAsState()
+
+    val updateVm: UpdateViewModel = viewModel(
+        factory = SimpleVMFactory {
+            UpdateViewModel(container.appContext, container.updateChecker, container.updatePrefs)
+        }
+    )
 
     val startDest = when (authState) {
         is AuthState.LoggedIn -> Routes.CHAT_LIST
@@ -73,6 +80,7 @@ fun AppNavigation(container: AppContainer) {
             )
             ChatListScreen(
                 viewModel = listVm,
+                updateVm = updateVm,
                 onOpen = { id -> nav.navigate(Routes.chat(id)) },
                 onSettings = { nav.navigate(Routes.SETTINGS) },
                 onFiles = { nav.navigate(Routes.FILES) },
@@ -144,6 +152,7 @@ fun AppNavigation(container: AppContainer) {
         }
         composable(Routes.SETTINGS_ABOUT) {
             SettingsAboutScreen(
+                updateVm = updateVm,
                 onBack = { nav.popBackStack() }
             )
         }
