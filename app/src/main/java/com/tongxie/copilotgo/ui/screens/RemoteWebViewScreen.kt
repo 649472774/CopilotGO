@@ -2,7 +2,9 @@ package com.tongxie.copilotgo.ui.screens
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
 import android.view.ViewGroup
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,6 +41,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -112,9 +116,13 @@ fun RemoteWebViewScreen(
     val view = LocalView.current
     val bgArgb = EmbedBg.toArgb()
 
+    // 若 WebView 已在后台保活（从会话列表返回再进入），不再显示首屏 Loading，
+    // 直接呈现已加载好的页面（不重载、不闪烁）。
+    val resumedSession = RemoteWebHolder.isAlive
+
     var progress by remember { mutableFloatStateOf(0f) }
-    var isLoading by remember { mutableStateOf(true) }
-    var firstLoad by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(!resumedSession) }
+    var firstLoad by remember { mutableStateOf(!resumedSession) }
     var canGoBack by remember { mutableStateOf(false) }
     var desktopMode by remember { mutableStateOf(false) }
     var immersive by remember { mutableStateOf(true) }
@@ -134,154 +142,66 @@ fun RemoteWebViewScreen(
         cb?.onReceiveValue(uris)
     }
 
-    // WebView 只创建一次，跨重组稳定
-    val webView = remember {
-        WebView(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            isFocusableInTouchMode = true
-            setBackgroundColor(bgArgb)
-
-            // 顶栏自动隐藏：根据滚动方向收起/展开；接近顶部时始终展开。
-            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
-                val dy = scrollY - oldScrollY
-                barVisible = when {
-                    scrollY <= 4 -> true
-                    dy > 6 -> false
-                    dy < -6 -> true
-                    else -> barVisible
-                }
-            }
-
-            val cookieManager = CookieManager.getInstance()
-            cookieManager.setAcceptCookie(true)
-            cookieManager.setAcceptThirdPartyCookies(this, true)
-
-            with(settings) {
-                javaScriptEnabled = true
-                domStorageEnabled = true
-                cacheMode = WebSettings.LOAD_DEFAULT
-                loadWithOverviewMode = true
-                useWideViewPort = true
-                builtInZoomControls = true
-                displayZoomControls = false
-                setSupportZoom(true)
-                javaScriptCanOpenWindowsAutomatically = true
-                mediaPlaybackRequiresUserGesture = false
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            }
-
-            if (BuildConfig.DEBUG) {
-                WebView.setWebContentsDebuggingEnabled(true)
-            }
-
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(
-                    view: WebView,
-                    request: WebResourceRequest
-                ): Boolean {
-                    val url = request.url
-                    val scheme = url.scheme?.lowercase()
-                    return if (scheme == "http" || scheme == "https") {
-                        false
-                    } else {
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, url).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            })
-                        }
-                        true
-                    }
-                }
-
-                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                    isLoading = true
-                    loadError = null
-                    canGoBack = view.canGoBack()
-                }
-
-                override fun onPageFinished(view: WebView, url: String?) {
-                    isLoading = false
-                    firstLoad = false
-                    canGoBack = view.canGoBack()
-                    applyImmersive(view, immersive)
-                }
-
-                override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
-                    canGoBack = view.canGoBack()
-                }
-
-                override fun onReceivedError(
-                    view: WebView,
-                    request: WebResourceRequest,
-                    error: WebResourceError
-                ) {
-                    // 只为主框架失败展示错误页，忽略子资源（图片/分析脚本等）失败
-                    if (request.isForMainFrame) {
-                        loadError = "加载失败：${error.description}（错误码 ${error.errorCode}）"
-                        isLoading = false
-                        firstLoad = false
-                    }
-                }
-            }
-
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView, newProgress: Int) {
-                    progress = newProgress / 100f
-                    // 进度推进时尽早注入 CSS，减少顶栏闪现
-                    if (newProgress >= 60) applyImmersive(view, immersive)
-                }
-
-                override fun onShowFileChooser(
-                    webView: WebView,
-                    filePathCallback: ValueCallback<Array<Uri>>,
-                    fileChooserParams: FileChooserParams
-                ): Boolean {
-                    pendingFileCallback.value?.onReceiveValue(null)
-                    pendingFileCallback.value = filePathCallback
-                    return try {
-                        fileChooserLauncher.launch(fileChooserParams.createIntent())
-                        true
-                    } catch (e: ActivityNotFoundException) {
-                        pendingFileCallback.value = null
-                        false
-                    }
-                }
-            }
-
-            // 下载交给系统（下载管理器 / 浏览器），WebView 自身不处理文件落地
-            setDownloadListener { url, _, _, _, _ ->
-                runCatching {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                    )
-                }
-            }
-
-            loadUrl(homeUrl)
-        }
-    }
-
-    // 容器仍用 SwipeRefreshLayout 承载 WebView，但禁用下拉刷新手势
-    // （用户反馈上滑误触刷新很烦）；刷新改由顶栏菜单「刷新」触发。
+    // WebView 进程级单例：跨「退出会话列表 → 再进入」保活，不销毁、不重载，保留登录态、
+    // 页面、滚动位置与 JS 状态。容器仍用 SwipeRefreshLayout 承载（下拉刷新手势禁用，
+    // 刷新改由顶栏菜单触发）。基础 Context 用 MutableContextWrapper，附着时指向当前 Activity。
     val swipeRefresh = remember {
-        SwipeRefreshLayout(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            isEnabled = false
-            addView(
-                webView,
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
+        RemoteWebHolder.acquire(context, homeUrl, bgArgb, BuildConfig.DEBUG)
+    }
+    val webView = RemoteWebHolder.web!!
+
+    // 把本次进入所需、依赖 Compose 状态/启动器的回调挂到保活单例上；离开时清空回调并把
+    // WebView 从父容器摘下、Context 回退到 application，保证下次可重新 attach 且不泄漏 Activity。
+    DisposableEffect(Unit) {
+        RemoteWebHolder.onScroll = { scrollY, dy ->
+            barVisible = when {
+                scrollY <= 4 -> true
+                dy > 6 -> false
+                dy < -6 -> true
+                else -> barVisible
+            }
+        }
+        RemoteWebHolder.onPageStarted = { v ->
+            isLoading = true
+            loadError = null
+            canGoBack = v.canGoBack()
+        }
+        RemoteWebHolder.onPageFinished = { v ->
+            isLoading = false
+            firstLoad = false
+            canGoBack = v.canGoBack()
+            applyImmersive(v, immersive)
+        }
+        RemoteWebHolder.onHistory = { v -> canGoBack = v.canGoBack() }
+        RemoteWebHolder.onMainError = { msg ->
+            loadError = msg
+            isLoading = false
+            firstLoad = false
+        }
+        RemoteWebHolder.onProgress = { p ->
+            progress = p / 100f
+            // 进度推进时尽早注入 CSS，减少顶栏闪现
+            if (p >= 60) applyImmersive(webView, immersive)
+        }
+        RemoteWebHolder.onFileChooser = fc@{ callback, intent ->
+            pendingFileCallback.value?.onReceiveValue(null)
+            pendingFileCallback.value = callback
+            return@fc try {
+                fileChooserLauncher.launch(intent)
+                true
+            } catch (e: ActivityNotFoundException) {
+                pendingFileCallback.value = null
+                false
+            }
+        }
+        RemoteWebHolder.onOpenExternal = { intent ->
+            runCatching { context.startActivity(intent) }
+        }
+        onDispose {
+            CookieManager.getInstance().flush()
+            pendingFileCallback.value?.onReceiveValue(null)
+            pendingFileCallback.value = null
+            RemoteWebHolder.release(context.applicationContext)
         }
     }
     LaunchedEffect(immersive) {
@@ -344,19 +264,6 @@ fun RemoteWebViewScreen(
         }
     }
 
-    // WebView 销毁绑定到自身生命周期（而非 lifecycleOwner 身份），避免被提前销毁
-    DisposableEffect(webView) {
-        onDispose {
-            CookieManager.getInstance().flush()
-            pendingFileCallback.value?.onReceiveValue(null)
-            pendingFileCallback.value = null
-            webView.stopLoading()
-            (webView.parent as? ViewGroup)?.removeView(webView)
-            (swipeRefresh.parent as? ViewGroup)?.removeView(swipeRefresh)
-            webView.destroy()
-        }
-    }
-
     BackHandler {
         if (webView.canGoBack()) webView.goBack() else onBack()
     }
@@ -389,17 +296,21 @@ fun RemoteWebViewScreen(
             .fillMaxSize()
             .background(EmbedBg)
     ) {
-        // 网页内容铺满窗口的内容区。系统栏由窗口直接着色（深色一体化），
-        // 键盘弹出/收起由 OS 原生缩放窗口处理，Chromium 自动把焦点输入框滚入可见区——
-        // 平滑、即时、不卡顿，且位置正确。
-        // 关键：WebView 容器必须与悬浮顶栏用「相同的状态栏内边距」，两层顶部才会对齐。
-        // 否则 WebView 会一直铺到状态栏正下方，而顶栏被下推，二者之间露出一条网页内容
-        // （表现为"浏览器内容渲染到栏的上面"）。这是静态 inset，不随键盘动画变化，无卡顿。
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.statusBars)
-        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // 确定性状态栏占位条：高度 = 系统状态栏（边到边时为真实高度；decor 已避让时为 0），
+            // 深色填充。网页内容区永远从它「下方」开始，从结构上保证网页绝不会渲染到状态栏区域
+            // 或顶栏上方——不依赖系统 inset 的消费时机，真机/登录页表现一致可靠。
+            Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsTopHeight(WindowInsets.statusBars)
+                    .background(EmbedBarBg)
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
             AndroidView(
                 factory = { swipeRefresh },
                 modifier = Modifier.fillMaxSize(),
@@ -463,10 +374,12 @@ fun RemoteWebViewScreen(
                     }
                 }
             }
+            }
         }
 
-        // 自动隐藏的悬浮顶栏：覆盖在网页之上（不挤压 WebView，开合时无重排/跳动）。
-        // 向下滚动收起、向上滚动或到顶展开，腾出最大阅读空间。
+        // 自动隐藏的悬浮顶栏：作为根层覆盖物，用与上方状态栏占位条等高的 windowInsetsPadding
+        // 下移，正好落在 WebView 内容区顶部（不会盖到状态栏，也不会在栏上方露出网页）。
+        // 向下滚动收起、向上滚动或到顶展开；覆盖在网页之上，开合不挤压 WebView，无重排/跳动。
         AnimatedVisibility(
             visible = barVisible && loadError == null,
             enter = expandVertically() + slideInVertically { -it },
@@ -586,6 +499,177 @@ fun RemoteWebViewScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 进程级单例：保活内嵌 Copilot 的 WebView，使「退出会话列表 → 再进入」时不重建、不重载，
+ * 保留登录态、页面、滚动位置与 JS 运行状态。WebView 以 [MutableContextWrapper] 作为基础 Context：
+ * 附着到界面时指向当前 Activity，离开时回退到 applicationContext，避免泄漏已销毁的 Activity
+ * （主流「保活 WebView」标准做法）。与界面相关、依赖 Compose 状态/启动器的回调通过可空字段
+ * 在每次进入时注入、离开时清空，从而把长生命周期的 WebView 与短生命周期的 Composable 解耦。
+ */
+private object RemoteWebHolder {
+    private var wrapper: MutableContextWrapper? = null
+    private var webView: WebView? = null
+    private var swipe: SwipeRefreshLayout? = null
+
+    val web: WebView? get() = webView
+    val isAlive: Boolean get() = webView != null
+
+    // 每次进入时注入、离开时清空的界面回调
+    var onScroll: ((scrollY: Int, dy: Int) -> Unit)? = null
+    var onPageStarted: ((WebView) -> Unit)? = null
+    var onPageFinished: ((WebView) -> Unit)? = null
+    var onHistory: ((WebView) -> Unit)? = null
+    var onMainError: ((String) -> Unit)? = null
+    var onProgress: ((Int) -> Unit)? = null
+    var onFileChooser: ((ValueCallback<Array<Uri>>, Intent) -> Boolean)? = null
+    var onOpenExternal: ((Intent) -> Unit)? = null
+
+    fun acquire(activity: Context, homeUrl: String, bgArgb: Int, debug: Boolean): SwipeRefreshLayout {
+        val w = wrapper ?: MutableContextWrapper(activity).also { wrapper = it }
+        w.baseContext = activity
+        if (webView == null) {
+            val wv = createWebView(w, bgArgb, debug)
+            webView = wv
+            swipe = SwipeRefreshLayout(w).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                // 禁用下拉刷新手势（上滑误触很烦）；刷新改由顶栏菜单触发。
+                isEnabled = false
+                addView(
+                    wv,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                )
+            }
+            wv.loadUrl(homeUrl)
+        }
+        return swipe!!
+    }
+
+    fun release(appContext: Context) {
+        onScroll = null
+        onPageStarted = null
+        onPageFinished = null
+        onHistory = null
+        onMainError = null
+        onProgress = null
+        onFileChooser = null
+        onOpenExternal = null
+        (swipe?.parent as? ViewGroup)?.removeView(swipe)
+        wrapper?.baseContext = appContext
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView(ctx: Context, bgArgb: Int, debug: Boolean): WebView {
+        return WebView(ctx).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            isFocusableInTouchMode = true
+            setBackgroundColor(bgArgb)
+
+            // 顶栏自动隐藏：根据滚动方向收起/展开；接近顶部时始终展开。
+            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+                onScroll?.invoke(scrollY, scrollY - oldScrollY)
+            }
+
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+            cookieManager.setAcceptThirdPartyCookies(this, true)
+
+            with(settings) {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                cacheMode = WebSettings.LOAD_DEFAULT
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                builtInZoomControls = true
+                displayZoomControls = false
+                setSupportZoom(true)
+                javaScriptCanOpenWindowsAutomatically = true
+                mediaPlaybackRequiresUserGesture = false
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
+
+            if (debug) {
+                WebView.setWebContentsDebuggingEnabled(true)
+            }
+
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): Boolean {
+                    val url = request.url
+                    val scheme = url.scheme?.lowercase()
+                    return if (scheme == "http" || scheme == "https") {
+                        false
+                    } else {
+                        onOpenExternal?.invoke(
+                            Intent(Intent.ACTION_VIEW, url).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                        )
+                        true
+                    }
+                }
+
+                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                    onPageStarted?.invoke(view)
+                }
+
+                override fun onPageFinished(view: WebView, url: String?) {
+                    onPageFinished?.invoke(view)
+                }
+
+                override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                    onHistory?.invoke(view)
+                }
+
+                override fun onReceivedError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError
+                ) {
+                    // 只为主框架失败展示错误页，忽略子资源（图片/分析脚本等）失败
+                    if (request.isForMainFrame) {
+                        onMainError?.invoke("加载失败：${error.description}（错误码 ${error.errorCode}）")
+                    }
+                }
+            }
+
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    onProgress?.invoke(newProgress)
+                }
+
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    filePathCallback: ValueCallback<Array<Uri>>,
+                    fileChooserParams: FileChooserParams
+                ): Boolean {
+                    val handler = onFileChooser ?: return false
+                    return handler.invoke(filePathCallback, fileChooserParams.createIntent())
+                }
+            }
+
+            // 下载交给系统（下载管理器 / 浏览器），WebView 自身不处理文件落地
+            setDownloadListener { url, _, _, _, _ ->
+                onOpenExternal?.invoke(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
             }
         }
     }
