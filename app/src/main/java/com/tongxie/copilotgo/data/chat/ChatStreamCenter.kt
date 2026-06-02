@@ -31,6 +31,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - load 时修正残留 isStreaming=true 的消息（上次进程被杀的痕迹），避免显示永久"..."。
  *
  * 进程被杀仍会丢——彻底解决需要 Foreground Service（后续可加）。
+ *
+ * ## 线程安全约定（v0.1.11 起严格执行）
+ * - 所有 [Session.messages] 的 **写** 必须发生在 Main 线程（scope = Main.immediate 保证）。
+ * - 持久化 [store.save] 必须先用 [snapshotForSave] 在 Main 上拷一份再扔给 IO，
+ *   否则 IO 线程序列化时和 Main 写并发 → `ConcurrentModificationException` 或 JSON 截断。
  */
 class ChatStreamCenter(
     private val store: SessionStore,
@@ -42,6 +47,8 @@ class ChatStreamCenter(
     private val sendingFlows = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
     private val errorFlows = ConcurrentHashMap<String, MutableStateFlow<String?>>()
     private val jobs = ConcurrentHashMap<String, Job>()
+    /** purge 之后还活着的 session id 集合检查；用于 send/save 拒绝复活已删除会话 */
+    private val purged = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     private val loaded = AtomicBoolean(false)
     private val loadMutex = Mutex()
@@ -54,6 +61,20 @@ class ChatStreamCenter(
                 loaded.set(true)
             }
         }
+    }
+
+    /**
+     * Main-thread 安全的 session snapshot：深拷贝 messages 列表（UiMessage 本身 immutable）。
+     * IO 序列化用此快照，避免与 Main 上的 add/replace 并发。
+     */
+    private fun snapshotForSave(s: Session): Session =
+        s.copy(messages = ArrayList(s.messages))
+
+    /** 持久化（snapshot + IO 串行）。已 purge 的 session 拒绝写回。 */
+    private fun saveSnap(id: String, s: Session) {
+        if (purged.contains(id)) return
+        val snap = snapshotForSave(s)
+        scope.launch { runCatching { store.save(snap) } }
     }
 
     fun sessionFlow(id: String): StateFlow<Session?> {
@@ -78,7 +99,7 @@ class ChatStreamCenter(
                                 s.messages[i] = fixed
                             }
                         }
-                        scope.launch { store.save(s) }
+                        saveSnap(id, s)
                     }
                 }
                 flow.value = s
@@ -102,7 +123,19 @@ class ChatStreamCenter(
         val s = sessionFlows[id]?.value ?: return
         s.model = model
         bump(id)
-        scope.launch { store.save(s) }
+        saveSnap(id, s)
+    }
+
+    /**
+     * 会话被删除时调用：取消活跃流任务、清空 in-memory 缓存、阻止后续 saveSnap 复活磁盘文件。
+     * 必须由 [com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel.delete] 在 `store.delete` 之前调用。
+     */
+    fun purge(id: String) {
+        purged.add(id)
+        jobs.remove(id)?.cancel()
+        sessionFlows.remove(id)
+        sendingFlows.remove(id)
+        errorFlows.remove(id)
     }
 
     /** 强制让 StateFlow 重新派发（绕过 data class equals 去重） */
@@ -125,9 +158,36 @@ class ChatStreamCenter(
         if (trimmed.isEmpty() && imageUrls.isEmpty()) return
         val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
         if (sendingFlow.value) return
-        val s = sessionFlows[id]?.value ?: return
         val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
 
+        // 异步主入口：先保证 session 已加载（Bug 8），再在 Main 上拼装+启动流
+        scope.launch {
+            val s = sessionFlows[id]?.value ?: run {
+                ensureLoaded()
+                val loaded = store.sessions.value.firstOrNull { it.id == id }
+                if (loaded == null) {
+                    errorFlow.value = "会话不存在或已被删除"
+                    return@launch
+                }
+                // 将刚加载的 session 灌进 flow（兼容 sessionFlow() 尚未触发 getOrPut 的边界）
+                sessionFlows.getOrPut(id) { MutableStateFlow<Session?>(null) }.value = loaded
+                loaded
+            }
+
+            startStreaming(id, s, trimmed, attachments, imageUrls, sendingFlow, errorFlow)
+        }
+    }
+
+    /** 在 Main.immediate 上调用：构造消息 + 启动 SSE job。 */
+    private fun startStreaming(
+        id: String,
+        s: Session,
+        trimmed: String,
+        attachments: List<String>,
+        imageUrls: List<String>,
+        sendingFlow: MutableStateFlow<Boolean>,
+        errorFlow: MutableStateFlow<String?>
+    ) {
         val finalPrompt = if (attachments.isEmpty()) {
             trimmed.ifEmpty { "请看图。" }
         } else {
@@ -158,18 +218,19 @@ class ChatStreamCenter(
             s.title = trimmed.take(30).ifEmpty { "图片对话" }
         }
         bump(id)
-        scope.launch { store.save(s) }
+        saveSnap(id, s)
 
         sendingFlow.value = true
         errorFlow.value = null
 
-        val isVision = imageUrls.isNotEmpty() ||
-            s.messages.any { it.role == "user" && it.imageUrls.isNotEmpty() }
+        // Bug 13 修复：vision 与否只看 **本次** 请求是否带图，不再扫历史。
+        // 历史里有图但本次没图 → 走纯文本 ChatRequest，避免把含图历史发给纯文本模型时被拒。
+        val isVisionThisTurn = imageUrls.isNotEmpty()
 
         jobs[id] = scope.launch {
             try {
-                suspend fun runOnce(model: String): Result<Unit> = runCatching {
-                    val flow: Flow<CopilotChatClient.ChatDelta> = if (isVision) {
+                suspend fun runOnce(model: String, prefix: String): Result<Unit> = runCatching {
+                    val flow: Flow<CopilotChatClient.ChatDelta> = if (isVisionThisTurn) {
                         val visionMessages = s.messages.dropLast(1).map { ui ->
                             val parts = mutableListOf<VisionContentPart>()
                             if (ui.content.isNotEmpty()) {
@@ -205,37 +266,39 @@ class ChatStreamCenter(
                     flow.collect { delta ->
                         if (delta.text.isNotEmpty()) {
                             buffer.append(delta.text)
+                            val rendered = prefix + buffer.toString()
                             replaceAssistant(s, assistantId) {
-                                it.copy(content = buffer.toString(), isStreaming = true)
+                                it.copy(content = rendered, isStreaming = true)
                             }
                             bump(id)
                             // 节流持久化：每 800ms 一次（用户退出/进程崩溃时保留部分内容）
                             val now = System.currentTimeMillis()
                             if (now - lastSaveTime > 800) {
                                 lastSaveTime = now
-                                launch { runCatching { store.save(s) } }
+                                saveSnap(id, s)
                             }
                         }
                     }
                     replaceAssistant(s, assistantId) {
-                        it.copy(content = buffer.toString(), isStreaming = false)
+                        it.copy(content = prefix + buffer.toString(), isStreaming = false)
                     }
                     bump(id)
                 }
 
-                var result = runOnce(s.model)
+                var result = runOnce(s.model, prefix = "")
                 val err1 = result.exceptionOrNull()
                 if (err1 != null && err1.message?.contains("model_not_supported") == true) {
                     val fallback = Constants.DEFAULT_MODEL
                     Logger.w("model ${s.model} not supported, fallback to $fallback")
                     s.model = fallback
-                    bump(id)
-                    store.save(s)
+                    val notice = "[已自动切换模型 → $fallback]\n"
                     replaceAssistant(s, assistantId) {
-                        it.copy(content = "[已自动切换模型 → $fallback]\n", isStreaming = true)
+                        it.copy(content = notice, isStreaming = true)
                     }
                     bump(id)
-                    result = runOnce(fallback)
+                    saveSnap(id, s)
+                    // Bug 6 修复：通过 prefix 把"已自动切换"提示与 buffer 拼接，避免 retry 第一帧把提示冲掉
+                    result = runOnce(fallback, prefix = notice)
                 }
 
                 result.onFailure { e ->
@@ -250,13 +313,13 @@ class ChatStreamCenter(
                 }
                 replaceAssistant(s, assistantId) { it.copy(isStreaming = false) }
                 bump(id)
-                store.save(s)
+                saveSnap(id, s)
             } catch (e: CancellationException) {
-                // 用户主动 stop：保留已收到的内容，清 streaming 标志，持久化
+                // 用户主动 stop 或 purge：保留已收到的内容，清 streaming 标志，持久化（除非已 purge）
                 runCatching {
                     replaceAssistant(s, assistantId) { it.copy(isStreaming = false) }
                     bump(id)
-                    store.save(s)
+                    saveSnap(id, s)
                 }
                 throw e
             } catch (e: Throwable) {
@@ -270,7 +333,7 @@ class ChatStreamCenter(
                         )
                     }
                     bump(id)
-                    store.save(s)
+                    saveSnap(id, s)
                 }
             } finally {
                 sendingFlow.value = false

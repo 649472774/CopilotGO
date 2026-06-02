@@ -883,3 +883,44 @@ _session.value = s.copy()   // new.revision == old.revision → equals true → 
 - emulator-5554 启动卡住，仅用 emulator-5556（可考虑再开一个 headless 做并发）
 </next_steps>
 
+
+
+---
+
+## v0.1.11 — 深度代码审查（2026-06）
+
+versionCode 11 → 12，versionName 0.1.10 → 0.1.11。
+
+### CI workflow 修复
+- 仓库 gradle.properties 删 org.gradle.java.home=C:\...（Linux runner 必败）
+- .github/workflows/build.yml：显式 setup-android 装 SDK 36 + build-tools 36.0.0、加 --stacktrace、新增 	estDebugUnitTest step、失败时上传 test report
+- scripts/release.ps1：命令行加 -Dorg.gradle.java.home=（三重保险）
+- 本机 ~/.gradle/gradle.properties 设 org.gradle.java.home（不进 git）
+- AGENTS.md §29 写明 JDK 解析顺序约定
+
+### Bug 修复（10 个，来自 explore agent claude-opus-4.7-xhigh 深度审查）
+
+**Critical**：
+1. ChatStreamCenter.purge(id) — 删 session 时取消流 + 阻止 saveSnap 复活磁盘文件
+2. ChatStreamCenter.saveSnap — Session.copy(messages = ArrayList(s.messages)) 快照后再交 IO，修 CME / 截断 JSON
+3. AppNavigation popUpTo(0) → popUpTo(nav.graph.id) { inclusive = true }（退登后能回旧屏 bug）
+4. SessionStore.save — tmp + rename 原子写，进程中途被杀不损坏会话
+
+**High**：
+5. ProxySettingsStore — 去掉 init runBlocking，改异步 collect（启动期 Main ANR 风险）
+6. ChatStreamCenter.runOnce(model, prefix) — 模型 fallback 提示不被 retry 第一帧覆盖
+7. ChatScreen LaunchedEffect 只用 messageCount 当 key（流式结束不再强拽回底部）
+8. ChatStreamCenter.send — 拆为 ensureLoaded + startStreaming，cold start 秒点 send 不再静默吞
+9. ChatScreen picker — IO + base64 切到 Dispatchers.IO
+10. LatexView — produceState + Dispatchers.Default 异步解析渲染 + DisposableEffect 回收 bitmap
+
+**Medium**：
+11. CopilotGoApp HttpLoggingInterceptor 加 redactHeader(Authorization/Cookie/...) — 修 token 进 logcat
+12. FilesScreen deleteRecursively / preview readText 切到 Dispatchers.IO
+13. ChatStreamCenter isVisionThisTurn = imageUrls.isNotEmpty()（不再扫历史误判）
+
+**未修（纳入 v0.2.x backlog）**：
+- Bug 14：sessionFlows 等 map 无限增长
+- Bug 15：SSE event:error 行解析
+
+详细修复说明见 AGENTS.md §28。

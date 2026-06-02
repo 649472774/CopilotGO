@@ -63,6 +63,15 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 ```
 
+**JDK 解析顺序（重要！别在 `gradle.properties` 里写死 `org.gradle.java.home`）**：
+- ✅ **CI / Linux runner**：靠 `setup-java@v4` 设置的 `JAVA_HOME`（仓库内 `gradle.properties` 必须保持 **没有** `org.gradle.java.home`，否则 CI 会因 Windows 路径不存在而崩）
+- ✅ **本机 Windows**：每台开发机一次性写到 user-global `~/.gradle/gradle.properties`（已被 Gradle 自动加载，不进 git）：
+  ```properties
+  org.gradle.java.home=C\:\\Program Files\\Android\\Android Studio\\jbr
+  ```
+- ✅ **`scripts/release.ps1`**：同时设 `$env:JAVA_HOME` + 传 `-Dorg.gradle.java.home=` 命令行参数，三重保险
+- ❌ **绝不**在仓库内 `gradle.properties` 写 `org.gradle.java.home=C:\...` —— 这是 v0.1.10 push 后 CI 失败的根因（commit `e62e700` 之前埋的雷）
+
 ### 4.2 编译 Debug APK
 ```powershell
 cd C:\Code\CopilotGo
@@ -465,3 +474,95 @@ _最后更新：v0.1.2 后_
 - "退出 session 流就断" → 检查 `ChatStreamCenter.scope` 是否被错误绑到 viewModelScope。
 - "进 session 看到 `...` 永远转" → 检查 `sessionFlow()` 的残留修正分支。
 - "同一 session 两个 VM" → 检查 `AppNavigation.kt` `viewModel(key = sessionId, ...)` 这个 key 是否漏了。
+
+---
+
+## 28. v0.1.11 深度代码审查修复（**新 session 必读**）
+
+通过一次完整的 explore agent 深度审查（claude-opus-4.7-xhigh, 488s），发现并修复 10 个 bug。**这套规则是过去踩坑总结，新 session 改代码前先扫一遍**：
+
+### 28.1 ChatStreamCenter（继 §27 的强化）
+- **删除 session 时必须 `center.purge(id)`**。`SessionListViewModel.delete()` 必须先 `center.purge(id)` 再 `store.delete(id)`。
+  否则正在跑的流（throttled save / finally save）会**复活**已被删除的磁盘 JSON 文件。
+- `purge(id)`：jobs[id]?.cancel + 清掉 sessionFlows/sendingFlows/errorFlows + `purged.add(id)`；所有 `saveSnap` 检查 `if (purged.contains(id)) return`。
+- **save 必须做 snapshot**：`Session.messages` 是 `MutableList<UiMessage>`，Main 上不停 add/replace；直接交给 IO 序列化会 CME（ConcurrentModificationException）或写出截断 JSON → 重启 load 失败 → 用户感知是"会话消失"。  
+  正确做法：`val snap = s.copy(messages = ArrayList(s.messages))`（在 Main 上做浅拷贝，UiMessage immutable 共享安全），然后 `scope.launch(Dispatchers.IO) { store.save(snap) }`。
+- **vision 检测只看本次**：`isVisionThisTurn = imageUrls.isNotEmpty()`。**不要**扫历史 messages 判 vision，否则用户上次发图后切回普通模型，所有后续 text 请求都被错误包成 vision payload。
+- **send() 入口必须 `ensureLoaded(id)` 后再读 sessionFlow value**：Application cold start 后用户秒点 send，sessionFlow value 可能还是 null，导致请求被静默吞掉，无报错无反应。
+- **模型 fallback 提示用 prefix 字符串**：`runOnce(model, prefix)` 第二参数。如果把"⚠ 模型 X 不可用，已切换"塞 buffer，retry 的第一个 token 到达时 `it.copy(content = buffer.toString())` 会覆盖。
+
+### 28.2 SessionStore — **原子写**
+- `save()` 必须先写 `<id>.json.tmp`、fsync、rename 到 `<id>.json`。直接 `file.writeText()` 在写到一半进程被 OS 杀 → 文件成"半截 JSON" → load 时 SerializationException → 会话整段丢。
+- `delete()` 顺手把 `.tmp` 也清掉。
+
+### 28.3 Navigation
+- **`popUpTo(0)` 是 Navigation Compose 的 no-op sentinel**，不会真的 pop。退出登录必须用 `popUpTo(nav.graph.id) { inclusive = true }` 或具名 `popUpTo(Routes.CHAT_LIST) { inclusive = true }`。否则用户从设置退登 → Back 还能进 ChatListScreen → token 失效 → 401 / 空白。
+
+### 28.4 启动期主线程禁忌
+- **`runBlocking { dataStore.data.first() }` 是 Application.onCreate 杀手**。DataStore 冷启动可能数百 ms，慢机命中 5s ANR。  
+  正确做法：MutableStateFlow 用默认值初始化，`init {}` 里 `storeScope.launch { ... .collect { _config.value = it } }` 异步覆盖。HttpClientProvider 已经 observe，首次 emit 会自动重建。
+
+### 28.5 Compose UI 主线程禁忌
+- **picker 回调直接做 IO + base64** → ANR。图片选 5 MB → base64 ~7 MB 字符串 + UTF-8 decode 阻塞 Main 50-100 ms。  
+  必须 `val scope = rememberCoroutineScope()` + `scope.launch { withContext(Dispatchers.IO) { readBytes(); Base64.encode(...) } }`。
+- **`LaunchedEffect(messageCount, sending)` 把 sending 当 key 是 bug**：流式结束（sending: true→false）会触发 effect 强制滚回底部，覆盖用户手动上滑。**只用 messageCount 当 key**。
+- **LatexView：`remember { TeXFormula(...).createTeXIcon(...).paintIcon(...) }` 在 Main 同步跑** → 30-200 ms / 公式。流式过程公式反复重渲染，主线程必卡。  
+  改用 `produceState(initialValue = null, latex, color, sizeSp) { value = withContext(Dispatchers.Default) { ... } }`，并加 `DisposableEffect(bitmap) { onDispose { bitmap?.recycle() } }` 防内存堆积。
+- **FilesScreen 的 `f.deleteRecursively()` / `f.readText().take(4000)`** 必须包 `scope.launch { withContext(Dispatchers.IO) { ... } }`。
+
+### 28.6 安全 — token 不能进 logcat
+- `HttpLoggingInterceptor` 用 HEADERS 级别时**必须** `redactHeader("Authorization")`、`"authorization"`、`"Cookie"`、`"Set-Cookie"`、`"Proxy-Authorization"`。  
+  任何持有 READ_LOGS 权限的进程或 `adb logcat` 都能直接读到 `gho_*` token。
+
+### 28.7 已知未修（v0.1.11 不修，纳入后续）
+- **Bug 14**：`sessionFlows` / `sendingFlows` / `errorFlows` 等 map 是 ConcurrentHashMap，用户开过的 session 永远留在内存。建议加 LRU 或 ChatViewModel.onCleared 触发 `release(id)` —— 但 `release` 不能误删活跃 session 的 in-flight 流。
+- **Bug 15**：SSE parser 忽略 `event: error` 行，只在 HTTP error 时报错。GitHub Copilot 偶尔会 200 + event:error，目前用户看到的现象是"流毫无征兆停了"。
+
+---
+
+## 29. CI workflow JDK 解析顺序（**v0.1.11 修复 GH Actions 红 X**）
+
+**症状**：GitHub Actions 跑 `gradlew assembleDebug` 失败：
+```
+Value 'C:\Program Files\Android\Android Studio\jbr' given for org.gradle.java.home Gradle property is invalid (Java home supplied is invalid).
+```
+
+**根因**：`gradle.properties` 里写了 `org.gradle.java.home=C:\Program Files\Android\Android Studio\jbr`。Linux runner 上这条路径必然不存在。
+
+**修复（三重保险）**：
+1. **仓库 `gradle.properties` 严禁写 `org.gradle.java.home`**。AI agent 看到本地构建说"找不到 Java"想加这条配置 → 绝对禁止。
+2. 本机用户全局 `~/.gradle/gradle.properties`（不进 git）写自己的 java.home。
+3. 命令行最高优先级：`gradlew "-Dorg.gradle.java.home=C:\Program Files\Android\Android Studio\jbr" assembleDebug`，已写进 `scripts/release.ps1`。
+
+**JDK 解析顺序（Gradle 文档）**：
+```
+1. -Dorg.gradle.java.home=...  (CLI -D)
+2. ~/.gradle/gradle.properties  (用户全局)
+3. <PROJECT>/gradle.properties  (仓库 — 别写！)
+4. JAVA_HOME 环境变量
+5. PATH 上的 java
+```
+
+**workflow.yml 检查清单**：
+- `setup-android@v3` 默认不装 SDK 36，必须显式 `with: packages: 'platform-tools platforms;android-36 build-tools;36.0.0'`（compileSdk = 36）。
+- `setup-java@v4` 装 Temurin 21（jdk 21）。
+- 加 `--stacktrace` 让失败时能看完整 cause。
+- 加 `testDebugUnitTest` step（CI 必跑单测）+ 失败时上传 `app/build/reports/tests/`。
+
+---
+
+## 30. Bug 修复优先级判断（给新 session 做 triage 用）
+
+按"用户感知 × 修复成本"排序，对新发现的 bug 应当按这个标尺评估优先级：
+
+| 优先级 | 标准 | 例子（来自 v0.1.11 审查） |
+|---|---|---|
+| Critical | 数据丢失 / 持续无响应 / 安全漏洞 | 删除复活 / 写入截断 / 退登能回旧屏 / token 进 logcat |
+| High | 必现 ANR / 流程被打断 | 启动 runBlocking / picker 卡 Main / Latex 渲染卡 / 滚动被拽 / send 静默吞 / 模型提示被覆盖 |
+| Medium | 偶现卡顿 / 体验差 / 内存增长 | FilesScreen IO 在 Main / vision 误判 / map 增长 |
+| Low | 极端边界 / 不影响主路径 | SSE event:error 解析 |
+
+**判断准则**：
+- "用户能感知" > "理论上有问题"
+- "改 10 行能修" 优先修
+- "需要改架构" 进 backlog

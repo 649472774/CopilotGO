@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,9 @@ import com.tongxie.copilotgo.ui.components.MessageBubble
 import com.tongxie.copilotgo.ui.components.ModelPickerInline
 import com.tongxie.copilotgo.ui.viewmodel.ChatViewModel
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,15 +81,19 @@ fun ChatScreen(
     val attachments = remember { mutableStateListOf<Pair<String, String>>() } // name -> text content
     // 图片：name -> data URI(base64)
     val imageItems = remember { mutableStateListOf<Pair<String, String>>() }
+    // 给 picker callback 用：切 IO 线程做 readBytes / base64
+    val scope = rememberCoroutineScope()
 
     val pickFile = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            runCatching {
-                val name = getFileName(context, uri)
-                val content = readUriText(context, uri)
-                attachments.add(name to content)
+            // Bug 9 修复：picker 回调在 Main 线程触发；之前直接在 Main 上 readBytes() + UTF-8 decode
+            // （up to 1 MB）会卡 UI。改成切到 IO 读，再回 Main 更新 state。
+            scope.launch {
+                val name = withContext(Dispatchers.IO) { runCatching { getFileName(context, uri) }.getOrDefault("file") }
+                val content = withContext(Dispatchers.IO) { runCatching { readUriText(context, uri) }.getOrNull() }
+                if (content != null) attachments.add(name to content)
             }
         }
     }
@@ -93,11 +101,14 @@ fun ChatScreen(
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
-        uris.forEach { uri ->
-            runCatching {
-                val name = getFileName(context, uri)
-                val dataUri = readUriAsDataUri(context, uri)
-                if (dataUri != null) imageItems.add(name to dataUri)
+        if (uris.isNotEmpty()) {
+            // Bug 9 修复：base64 编码 5MB 图片在中端机要 ~50-100 ms 纯 CPU + IO 读取本身阻塞 → ANR 风险
+            scope.launch {
+                uris.forEach { uri ->
+                    val name = withContext(Dispatchers.IO) { runCatching { getFileName(context, uri) }.getOrDefault("image") }
+                    val dataUri = withContext(Dispatchers.IO) { runCatching { readUriAsDataUri(context, uri) }.getOrNull() }
+                    if (dataUri != null) imageItems.add(name to dataUri)
+                }
             }
         }
     }
@@ -149,8 +160,10 @@ fun ChatScreen(
         }
     }
 
-    // 新消息到达：恢复跟随并动画滚到底
-    LaunchedEffect(messageCount, sending) {
+    // 新消息到达：恢复跟随并动画滚到底。
+    // Bug 7 修复：之前 key 包含 sending，导致流式结束（sending: true→false）也会触发，
+    // 把用户手动上滑的位置强行拽回底部。现在只在消息条数变化时跟随。
+    LaunchedEffect(messageCount) {
         if (messageCount > 0) {
             followBottom = true
             listState.animateScrollToItem(anchorIndex)

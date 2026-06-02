@@ -66,7 +66,7 @@ fun AppNavigation(container: AppContainer) {
         composable(Routes.CHAT_LIST) {
             val listVm: SessionListViewModel = viewModel(
                 factory = SimpleVMFactory {
-                    SessionListViewModel(container.sessionStore, container.chatClient, container.authRepo)
+                    SessionListViewModel(container.sessionStore, container.chatClient, container.authRepo, container.chatStreamCenter)
                 }
             )
             ChatListScreen(
@@ -80,7 +80,7 @@ fun AppNavigation(container: AppContainer) {
             val sessionId = backStackEntry.arguments?.getString("sessionId") ?: return@composable
             val listVm: SessionListViewModel = viewModel(
                 factory = SimpleVMFactory {
-                    SessionListViewModel(container.sessionStore, container.chatClient, container.authRepo)
+                    SessionListViewModel(container.sessionStore, container.chatClient, container.authRepo, container.chatStreamCenter)
                 }
             )
             val chatVm: ChatViewModel = viewModel(
@@ -113,8 +113,12 @@ fun AppNavigation(container: AppContainer) {
             SettingsAccountScreen(
                 authVm = authVm,
                 onLoggedOut = {
+                    // Bug 3 修复：popUpTo(0) 在 Navigation 3 里是"不 pop"的 no-op，导致从设置
+                    // 退出登录后 Back 能回到带缓存的 ChatListScreen，触发 401。
+                    // 改成 pop 到 graph 起点（含起点）+ 重新 navigate 到 LOGIN，确保 back-stack 只剩 LOGIN。
                     nav.navigate(Routes.LOGIN) {
-                        popUpTo(0)
+                        popUpTo(nav.graph.id) { inclusive = true }
+                        launchSingleTop = true
                     }
                 },
                 onBack = { nav.popBackStack() }

@@ -30,11 +30,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.tongxie.copilotgo.data.storage.AppPaths
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,10 +50,35 @@ fun FilesScreen(
     var currentDir by remember { mutableStateOf(paths.root) }
     var entries by remember { mutableStateOf<List<File>>(emptyList()) }
     var preview by remember { mutableStateOf<File?>(null) }
+    var previewContent by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // 目录刷新（Bug 12 修复）：listFiles + sort 也搬到 IO，避免大目录卡 UI
+    suspend fun refresh(dir: File): List<File> = withContext(Dispatchers.IO) {
+        (dir.listFiles()?.toList() ?: emptyList())
+            .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+    }
 
     LaunchedEffect(currentDir) {
-        entries = (currentDir.listFiles()?.toList() ?: emptyList())
-            .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+        entries = refresh(currentDir)
+    }
+
+    // 预览改成异步读取前 16 KB，避免主线程 readText 整个大文件
+    LaunchedEffect(preview) {
+        val pf = preview
+        previewContent = if (pf == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    pf.inputStream().use { fis ->
+                        val buf = ByteArray(16 * 1024)
+                        val n = fis.read(buf)
+                        if (n <= 0) "" else String(buf, 0, n, Charsets.UTF_8)
+                    }
+                }.getOrDefault("(二进制文件或读取失败)")
+            }
+        }
     }
 
     Scaffold(
@@ -115,9 +144,13 @@ fun FilesScreen(
                                 )
                             }
                             IconButton(onClick = {
-                                f.deleteRecursively()
-                                entries = (currentDir.listFiles()?.toList() ?: emptyList())
-                                    .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                                // Bug 12 修复：deleteRecursively 同步遍历目录在 Main 上会卡 UI
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        runCatching { f.deleteRecursively() }
+                                    }
+                                    entries = refresh(currentDir)
+                                }
                             }) {
                                 Icon(
                                     Icons.Default.Delete,
@@ -143,8 +176,7 @@ fun FilesScreen(
             title = { Text(pf.name) },
             text = {
                 Text(
-                    runCatching { pf.readText().take(4000) }
-                        .getOrDefault("(二进制文件或读取失败)"),
+                    previewContent ?: "正在读取…",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }

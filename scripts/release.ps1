@@ -73,7 +73,7 @@ if ($SkipBuild) {
 # === 2. 编译 ===
 $env:JAVA_HOME = $JavaHome
 Write-Host "Building (JAVA_HOME=$JavaHome) ..." -ForegroundColor Cyan
-& "$root\gradlew.bat" --no-daemon --console=plain assembleDebug
+& "$root\gradlew.bat" --no-daemon --console=plain "-Dorg.gradle.java.home=$JavaHome" assembleDebug
 if ($LASTEXITCODE -ne 0) { throw "Gradle build FAILED" }
 Write-Host "Build OK" -ForegroundColor Green
 

@@ -1,5 +1,6 @@
 package com.tongxie.copilotgo.data.auth
 
+import com.tongxie.copilotgo.data.net.HttpClientProvider
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -22,8 +23,12 @@ class DeviceFlowClientTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
+        // 测试用 stub HttpClientProvider，固定返回一个普通 OkHttpClient。
+        val provider = object : HttpClientProvider {
+            override val client: OkHttpClient = OkHttpClient()
+        }
         client = DeviceFlowClient(
-            httpClient = OkHttpClient(),
+            httpProvider = provider,
             json = json,
             clientId = "test_client",
             deviceCodeUrl = server.url("/device/code").toString(),

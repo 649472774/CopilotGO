@@ -37,7 +37,22 @@ class SessionStore(
         mutex.withLock {
             session.updatedAt = System.currentTimeMillis()
             val file = File(paths.sessions, "${session.id}.json")
-            file.writeText(json.encodeToString(Session.serializer(), session))
+            val tmp = File(paths.sessions, "${session.id}.json.tmp")
+            // 原子写：先写到 .tmp，再 rename。进程 mid-write 被杀也只是丢 .tmp，
+            // 不会把已存在的 <id>.json 截断成"无法解析的半截 JSON"导致整段会话被 load() 丢掉。
+            val payload = json.encodeToString(Session.serializer(), session)
+            tmp.outputStream().use { fos ->
+                fos.write(payload.toByteArray(Charsets.UTF_8))
+                runCatching { fos.fd.sync() }
+            }
+            if (!tmp.renameTo(file)) {
+                // 兼容某些 FS rename 覆盖失败：删旧 + 再 rename，最后兜底直接 writeText
+                file.delete()
+                if (!tmp.renameTo(file)) {
+                    file.writeText(payload)
+                    tmp.delete()
+                }
+            }
             val current = _sessions.value.toMutableList()
             val idx = current.indexOfFirst { it.id == session.id }
             if (idx >= 0) current[idx] = session else current.add(0, session)
@@ -48,6 +63,7 @@ class SessionStore(
     suspend fun delete(sessionId: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
             File(paths.sessions, "$sessionId.json").delete()
+            File(paths.sessions, "$sessionId.json.tmp").delete()
             _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         }
     }

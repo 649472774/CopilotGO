@@ -48,6 +48,14 @@ class AppContainer(app: CopilotGoApp) {
         } else {
             HttpLoggingInterceptor.Level.NONE
         }
+        // Bug 11 修复：debug 构建用 HEADERS 级日志便于排查，但绝对不能把 Bearer token
+        // 打进 logcat — 任何 READ_LOGS 权限的进程或 device dump 都能拿到。
+        redactHeader("Authorization")
+        redactHeader("authorization")
+        redactHeader("Cookie")
+        redactHeader("Set-Cookie")
+        redactHeader("X-GitHub-Api-Version")
+        redactHeader("Proxy-Authorization")
     }
 
     val proxySettings = ProxySettingsStore(app)

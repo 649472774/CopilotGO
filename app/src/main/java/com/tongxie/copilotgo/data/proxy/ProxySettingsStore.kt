@@ -11,13 +11,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 private val Context.proxyDataStore by preferencesDataStore("proxy_prefs")
 
+/**
+ * 代理配置存储。
+ *
+ * v0.1.11 修复（Bug 5）：移除了构造里的 `runBlocking { dataStore.data.first() }`。
+ * Application.onCreate() 在 Main 线程创建 AppContainer，再创建本类，runBlocking 会
+ * 同步阻塞 Main 一直到 DataStore 完成首次冷启动加载（可达数百 ms，慢机上可能命中
+ * 5s ANR 阈值）。现在 `_config` 用空 [ProxyConfig] 初始化，真实值由 init {} 异步 collect
+ * 后端持续覆盖；[HttpClientProvider] 已 observe [config] flow，首次 emit 会自动重建客户端。
+ */
 class ProxySettingsStore(private val context: Context) {
 
     private companion object {
@@ -35,9 +42,9 @@ class ProxySettingsStore(private val context: Context) {
         port = this[KEY_PORT] ?: 7890
     )
 
-    private val _config: MutableStateFlow<ProxyConfig> = MutableStateFlow(
-        runBlocking { context.proxyDataStore.data.first().toProxyConfig() }
-    )
+    // 初始用默认值（关闭状态），DataStore 加载后由 init {} 的 collect 覆盖。
+    // 默认 enabled=false → 在覆盖之前网络层走直连，行为合理。
+    private val _config: MutableStateFlow<ProxyConfig> = MutableStateFlow(ProxyConfig())
 
     val config: StateFlow<ProxyConfig> = _config
 
