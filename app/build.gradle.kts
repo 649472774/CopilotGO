@@ -12,8 +12,8 @@ android {
         applicationId = "com.tongxie.copilotgo"
         minSdk = 34
         targetSdk = 34
-        versionCode = 29
-        versionName = "0.1.28"
+        versionCode = 30
+        versionName = "0.1.29"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
