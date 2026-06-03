@@ -34,10 +34,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -106,7 +107,7 @@ private val EmbedOnBgDim = Color(0xFF8B949E)
  * - 登录态：CookieManager 持久化（含第三方 cookie），onPause/销毁时 flush 落盘。
  * - 文件上传桥接、外链交系统、下载交系统、主框架错误重试。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun RemoteWebViewScreen(
@@ -439,10 +440,15 @@ fun RemoteWebViewScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     // 关键：把 WebView 容器的物理高度收缩到「键盘 + 导航栏」之上。
-                    // union 取两者每条边的较大值：键盘收起时=导航栏高度；键盘弹出时=键盘高度
-                    // （此时导航栏被键盘盖住，inset 归 0），不会重复叠加。WebView 物理变矮后，
-                    // Chromium 重算 100vh，底部输入框稳定落在键盘上方，滚动历史也不会再被遮挡。
-                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                    // 用 imeAnimationTarget（键盘的「最终目标高度」）而非 ime（逐帧动画值）：
+                    // 后者会在键盘 ~300ms 弹出动画里每一帧都改变 padding → WebView 每帧重排整页 →
+                    // 卡死/极慢。改用 target 后，padding 一步跳到最终高度，WebView 只重排一次。
+                    // 这正是 Via 等轻量浏览器的做法：网页内容直接「snap」到键盘上方的最终尺寸，
+                    // 键盘动画滑上来时内容已经就位，没有逐帧重排，丝滑不卡。
+                    // union 取两者每条边的较大值：键盘收起=导航栏高度；键盘弹出=键盘高度（此时
+                    // 导航栏被键盘盖住，inset 归 0），不会重复叠加。WebView 物理变矮后 Chromium
+                    // 重算 100vh，底部输入框稳定落在键盘上方，滚动历史也不会再被遮挡。
+                    .windowInsetsPadding(WindowInsets.imeAnimationTarget.union(WindowInsets.navigationBars))
             ) {
             AndroidView(
                 factory = { swipeRefresh },
