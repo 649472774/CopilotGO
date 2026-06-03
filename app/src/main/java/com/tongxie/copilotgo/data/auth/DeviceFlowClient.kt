@@ -28,10 +28,11 @@ class DeviceFlowClient(
             .post(body)
             .header("Accept", "application/json")
             .build()
-        val resp = httpProvider.client.newCall(req).executeAsync()
-        if (!resp.isSuccessful) error("device_code request failed: ${resp.code}")
-        val text = resp.body?.string().orEmpty()
-        return json.decodeFromString(DeviceCodeResponse.serializer(), text)
+        return httpProvider.client.newCall(req).executeAsync().use { resp ->
+            if (!resp.isSuccessful) error("device_code request failed: ${resp.code}")
+            val text = resp.body?.string().orEmpty()
+            json.decodeFromString(DeviceCodeResponse.serializer(), text)
+        }
     }
 
     fun pollAccessToken(deviceCode: DeviceCodeResponse): Flow<PollResult> = flow {
@@ -75,9 +76,10 @@ class DeviceFlowClient(
             .post(body)
             .header("Accept", "application/json")
             .build()
-        val resp = httpProvider.client.newCall(req).executeAsync()
-        val text = resp.body?.string().orEmpty()
-        return json.decodeFromString(AccessTokenResponse.serializer(), text)
+        return httpProvider.client.newCall(req).executeAsync().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            json.decodeFromString(AccessTokenResponse.serializer(), text)
+        }
     }
 
     sealed interface PollResult {

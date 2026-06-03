@@ -50,7 +50,7 @@ class ProxyAwareHttpClientProvider(
 
             when (config.type) {
                 ProxyType.HTTP -> {
-                    JavaNetAuthenticator.setDefault(null)
+                    clearSocksAuthenticator()
                     if (config.requiresAuth) {
                         builder.proxyAuthenticator(OkHttpAuthenticator { _, response ->
                             if (response.request.header("Proxy-Authorization") != null) {
@@ -68,25 +68,52 @@ class ProxyAwareHttpClientProvider(
                 }
                 ProxyType.SOCKS5 -> {
                     if (config.requiresAuth) {
-                        // SOCKS credentials are process-global in Java; OkHttp proxyAuthenticator is HTTP-only.
-                        // Gate on RequestorType.PROXY so these creds are never handed to non-proxy requestors.
-                        JavaNetAuthenticator.setDefault(object : JavaNetAuthenticator() {
-                            override fun getPasswordAuthentication(): PasswordAuthentication? =
-                                if (requestorType == RequestorType.PROXY) {
-                                    PasswordAuthentication(config.username, config.password.toCharArray())
-                                } else {
-                                    null
-                                }
-                        })
+                        installSocksAuthenticator(config)
                     } else {
-                        JavaNetAuthenticator.setDefault(null)
+                        clearSocksAuthenticator()
                     }
                 }
             }
         } else {
             builder.proxy(Proxy.NO_PROXY)
-            JavaNetAuthenticator.setDefault(null)
+            clearSocksAuthenticator()
         }
         return builder.build()
+    }
+
+    private fun installSocksAuthenticator(config: ProxyConfig) {
+        val authKey = SocksAuthKey(config.username, config.password)
+        synchronized(authenticatorLock) {
+            if (installedSocksAuthKey == authKey) return
+            // SOCKS credentials are process-global in Java; OkHttp proxyAuthenticator is HTTP-only.
+            // Gate on RequestorType.PROXY so these creds are never handed to non-proxy requestors.
+            JavaNetAuthenticator.setDefault(object : JavaNetAuthenticator() {
+                override fun getPasswordAuthentication(): PasswordAuthentication? =
+                    if (requestorType == RequestorType.PROXY) {
+                        PasswordAuthentication(config.username, config.password.toCharArray())
+                    } else {
+                        null
+                    }
+            })
+            installedSocksAuthKey = authKey
+            authenticatorCleared = false
+        }
+    }
+
+    private fun clearSocksAuthenticator() {
+        synchronized(authenticatorLock) {
+            if (installedSocksAuthKey == null && authenticatorCleared) return
+            JavaNetAuthenticator.setDefault(null)
+            installedSocksAuthKey = null
+            authenticatorCleared = true
+        }
+    }
+
+    private data class SocksAuthKey(val username: String, val password: String)
+
+    companion object {
+        private val authenticatorLock = Any()
+        private var installedSocksAuthKey: SocksAuthKey? = null
+        private var authenticatorCleared = false
     }
 }

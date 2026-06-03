@@ -77,11 +77,12 @@ fun SettingsProxyScreen(
     }
 
     val portValue = portText.toIntOrNull()
-    val hostError = editingConfig.host.isBlank()
-    val portError = portValue == null || portValue !in 1..65535
-    val isFormValid = !hostError && !portError
-    val hasUnsavedChanges = editingConfig != savedConfig
     val inputsEnabled = editingConfig.enabled
+    val draftConfig = editingConfig.copy(port = portValue ?: 0)
+    val hostError = inputsEnabled && !editingConfig.copy(port = 1).isValid()
+    val portError = inputsEnabled && (portValue == null || portValue !in 1..65535)
+    val isFormValid = !inputsEnabled || draftConfig.isValid()
+    val hasUnsavedChanges = editingConfig != savedConfig
     val testing = testState is ProxyViewModel.TestState.Testing
 
     fun updateDraft(config: ProxyConfig, newPortText: String = config.port.toString()) {
@@ -122,7 +123,7 @@ fun SettingsProxyScreen(
                     Column(Modifier.weight(1f)) {
                         Text("启用代理", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "所有 API 请求经本地代理转发",
+                            "所有 API 请求经本地代理转发；Remote/WebView 网页模式走系统直连",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -156,7 +157,7 @@ fun SettingsProxyScreen(
                     enabled = inputsEnabled,
                     isError = hostError,
                     supportingText = {
-                        if (hostError) Text("地址不能为空") else Text("例如 127.0.0.1 或 10.0.2.2")
+                        if (hostError) Text("地址不能为空，且不能包含空格、协议或路径") else Text("例如 127.0.0.1 或 10.0.2.2")
                     },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
@@ -337,7 +338,8 @@ fun SettingsProxyScreen(
                         "• Clash：关闭 VPN 模式，开启 HTTP / SOCKS5 端口（7890 / 7891）和「允许局域网连接」\n" +
                         "• 模拟器主机回环地址为 10.0.2.2\n" +
                         "• 真机填写 Clash 监听的局域网 IP；若 Clash 运行在手机上可用 127.0.0.1\n" +
-                        "• 仅影响 API 请求（聊天 / 登录 / 模型列表）",
+                        "• 仅影响 API 请求（聊天 / 登录 / 模型列表）\n" +
+                        "• Remote/WebView 网页模式走系统直连，不经过此代理",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

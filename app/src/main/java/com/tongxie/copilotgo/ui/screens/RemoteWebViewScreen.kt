@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
@@ -14,6 +15,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -130,6 +132,15 @@ fun RemoteWebViewScreen(
     var barVisible by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var injectorsAppliedForLoad by remember { mutableStateOf(resumedSession) }
+
+    fun applyPageInjectorsOnce(v: WebView) {
+        if (!injectorsAppliedForLoad) {
+            applyImmersive(v, immersive)
+            applyEnterAsNewline(v)
+            injectorsAppliedForLoad = true
+        }
+    }
 
     // 文件选择回调桥（WebChromeClient 在 factory 里创建，需用稳定 holder 与 Compose launcher 通信）
     val pendingFileCallback = remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -162,6 +173,7 @@ fun RemoteWebViewScreen(
             }
         }
         RemoteWebHolder.onPageStarted = { v ->
+            injectorsAppliedForLoad = false
             isLoading = true
             loadError = null
             canGoBack = v.canGoBack()
@@ -170,8 +182,7 @@ fun RemoteWebViewScreen(
             isLoading = false
             firstLoad = false
             canGoBack = v.canGoBack()
-            applyImmersive(v, immersive)
-            applyEnterAsNewline(v)
+            applyPageInjectorsOnce(v)
         }
         RemoteWebHolder.onHistory = { v -> canGoBack = v.canGoBack() }
         RemoteWebHolder.onMainError = { msg ->
@@ -183,8 +194,7 @@ fun RemoteWebViewScreen(
             progress = p / 100f
             // 进度推进时尽早注入 CSS 与回车改换行，减少顶栏闪现并尽快让换行键生效
             if (p >= 60) {
-                applyImmersive(webView, immersive)
-                applyEnterAsNewline(webView)
+                applyPageInjectorsOnce(webView)
             }
         }
         RemoteWebHolder.onFileChooser = fc@{ callback, intent ->
@@ -424,69 +434,75 @@ fun RemoteWebViewScreen(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-            AndroidView(
-                factory = { swipeRefresh },
-                modifier = Modifier.fillMaxSize(),
-                update = {
-                    webView.setBackgroundColor(bgArgb)
-                }
-            )
+                AndroidView(
+                    factory = {
+                        swipeRefresh.apply {
+                            setBackgroundColor(bgArgb)
+                            webView.setBackgroundColor(bgArgb)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    update = {
+                        it.setBackgroundColor(bgArgb)
+                        webView.setBackgroundColor(bgArgb)
+                    }
+                )
 
-            val err = loadError
-            when {
-                err != null -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(EmbedBg)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            err,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFFF85149)
-                        )
-                        Text(
-                            "请检查网络（github.com 是否可访问），然后重试。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = EmbedOnBgDim,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
-                        TextButton(
-                            onClick = {
-                                loadError = null
-                                firstLoad = true
-                                webView.reload()
-                            },
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) { Text("重试") }
+                val err = loadError
+                when {
+                    err != null -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(EmbedBg)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                err,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFFF85149)
+                            )
+                            Text(
+                                "请检查网络（github.com 是否可访问），然后重试。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = EmbedOnBgDim,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                            TextButton(
+                                onClick = {
+                                    loadError = null
+                                    firstLoad = true
+                                    webView.reload()
+                                },
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) { Text("重试") }
+                        }
+                    }
+                    // 首屏品牌化 Loading：深色背景 + 转圈，消除 WebView 白屏闪烁
+                    firstLoad -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(EmbedBg)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = EmbedOnBg,
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Text(
+                                "正在连接 Copilot…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = EmbedOnBgDim,
+                                modifier = Modifier.padding(top = 16.dp)
+                            )
+                        }
                     }
                 }
-                // 首屏品牌化 Loading：深色背景 + 转圈，消除 WebView 白屏闪烁
-                firstLoad -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(EmbedBg)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator(
-                            color = EmbedOnBg,
-                            modifier = Modifier.size(36.dp)
-                        )
-                        Text(
-                            "正在连接 Copilot…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = EmbedOnBgDim,
-                            modifier = Modifier.padding(top = 16.dp)
-                        )
-                    }
-                }
-            }
             }
         }
     }
@@ -528,6 +544,7 @@ private object RemoteWebHolder {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
+                setBackgroundColor(bgArgb)
                 // 禁用下拉刷新手势（上滑误触很烦）；刷新改由顶栏菜单触发。
                 isEnabled = false
                 addView(
@@ -587,6 +604,9 @@ private object RemoteWebHolder {
                 javaScriptCanOpenWindowsAutomatically = true
                 mediaPlaybackRequiresUserGesture = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    setOffscreenPreRaster(true)
+                }
             }
 
             if (debug) {
@@ -634,6 +654,20 @@ private object RemoteWebHolder {
                         onMainError?.invoke("加载失败：${error.description}（错误码 ${error.errorCode}）")
                     }
                 }
+
+                override fun onReceivedHttpError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    errorResponse: WebResourceResponse
+                ) {
+                    if (request.isForMainFrame) {
+                        val reason = errorResponse.reasonPhrase
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { " $it" }
+                            .orEmpty()
+                        onMainError?.invoke("加载失败：HTTP ${errorResponse.statusCode}$reason")
+                    }
+                }
             }
 
             webChromeClient = object : WebChromeClient() {
@@ -671,16 +705,30 @@ private fun applyImmersive(webView: WebView, enabled: Boolean) {
     val js = """
         (function(){
           var ID='cg-immersive-style';
-          var ex=document.getElementById(ID);
-          if(${enabled}){
-            if(!ex){
+          var CSS='.AppHeader,header.AppHeader,.js-header-wrapper,.footer,footer.footer{display:none!important;} body{padding-top:0!important;}';
+          function ensure(){
+            if(!document.getElementById(ID)){
               var s=document.createElement('style');
               s.id=ID;
-              s.textContent='.AppHeader,header.AppHeader,.js-header-wrapper,.footer,footer.footer{display:none!important;} body{padding-top:0!important;}';
+              s.textContent=CSS;
               (document.head||document.documentElement).appendChild(s);
             }
-          } else if(ex){
-            ex.parentNode.removeChild(ex);
+          }
+          var ex=document.getElementById(ID);
+          if(${enabled}){
+            ensure();
+            if(!window.__cgImmersiveObserver && window.MutationObserver){
+              window.__cgImmersiveObserver=new MutationObserver(ensure);
+              window.__cgImmersiveObserver.observe(document.documentElement,{childList:true,subtree:true});
+            }
+          } else {
+            if(window.__cgImmersiveObserver){
+              window.__cgImmersiveObserver.disconnect();
+              window.__cgImmersiveObserver=null;
+            }
+            if(ex){
+              ex.parentNode.removeChild(ex);
+            }
           }
         })();
     """.trimIndent()

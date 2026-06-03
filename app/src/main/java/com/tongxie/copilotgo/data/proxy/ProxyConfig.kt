@@ -16,5 +16,12 @@ data class ProxyConfig(
     val requiresAuth: Boolean
         get() = username.isNotBlank()
 
-    fun isValid(): Boolean = host.isNotBlank() && port in 1..65535
+    fun isValid(): Boolean {
+        val trimmedHost = host.trim()
+        if (trimmedHost.isEmpty() || trimmedHost != host || port !in 1..65535) return false
+        if (trimmedHost.contains(Regex("\\s")) || trimmedHost.contains("/") || trimmedHost.contains("://")) {
+            return false
+        }
+        return trimmedHost.split('.').all { it.isNotEmpty() }
+    }
 }

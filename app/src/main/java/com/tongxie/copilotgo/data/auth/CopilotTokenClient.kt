@@ -20,11 +20,12 @@ class CopilotTokenClient(
             .header("Editor-Version", Constants.EDITOR_VERSION)
             .header("Editor-Plugin-Version", Constants.EDITOR_PLUGIN_VERSION)
             .build()
-        val resp = httpProvider.client.newCall(req).executeAsync()
-        val text = resp.body?.string().orEmpty()
-        if (!resp.isSuccessful) {
-            error("Copilot token exchange failed (${resp.code}): $text")
+        return httpProvider.client.newCall(req).executeAsync().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                error("Copilot token exchange failed (${resp.code}): $text")
+            }
+            json.decodeFromString(CopilotTokenResponse.serializer(), text)
         }
-        return json.decodeFromString(CopilotTokenResponse.serializer(), text)
     }
 }

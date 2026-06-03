@@ -67,13 +67,13 @@ class CopilotChatClient(
             .build()
 
         val resp = httpProvider.client.newCall(req).executeAsync()
-        if (!resp.isSuccessful) {
-            val errBody = resp.body?.string().orEmpty()
-            error("chat failed (${resp.code}): $errBody")
-        }
-        val source = resp.body?.source() ?: error("empty body")
-
         try {
+            if (!resp.isSuccessful) {
+                val errBody = resp.body?.string().orEmpty()
+                error("chat failed (${resp.code}): $errBody")
+            }
+            val source = resp.body?.source() ?: error("empty body")
+
             SseParser.lines(source).collect { raw ->
                 runCatching {
                     val chunk = json.decodeFromString(ChatStreamChunk.serializer(), raw)
@@ -108,15 +108,16 @@ class CopilotChatClient(
                 .header("Editor-Plugin-Version", Constants.EDITOR_PLUGIN_VERSION)
                 .header("Copilot-Integration-Id", Constants.COPILOT_INTEGRATION_ID)
                 .build()
-            val resp = httpProvider.client.newCall(req).executeAsync()
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) {
-                Logger.w("listModels failed (${resp.code}): $text")
-                return@withContext Constants.FALLBACK_MODELS.map { ModelInfo(id = it) }
-            }
-            val parsed = json.decodeFromString(ModelListResponse.serializer(), text)
-            parsed.data.filter { it.modelPickerEnabled }.ifEmpty {
-                Constants.FALLBACK_MODELS.map { ModelInfo(id = it) }
+            httpProvider.client.newCall(req).executeAsync().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    Logger.w("listModels failed (${resp.code}): $text")
+                    return@withContext Constants.FALLBACK_MODELS.map { ModelInfo(id = it) }
+                }
+                val parsed = json.decodeFromString(ModelListResponse.serializer(), text)
+                parsed.data.filter { it.modelPickerEnabled }.ifEmpty {
+                    Constants.FALLBACK_MODELS.map { ModelInfo(id = it) }
+                }
             }
         } catch (e: Throwable) {
             Logger.w("listModels error", throwable = e)

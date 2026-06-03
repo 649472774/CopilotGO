@@ -46,7 +46,7 @@ class UpdateChecker(
             return CheckResult.Failed(e.message ?: "网络错误，检查更新失败")
         }
 
-        if (release.draft) {
+        if (release.draft || release.prerelease) {
             return CheckResult.UpToDate(currentVersionName)
         }
 
@@ -55,7 +55,10 @@ class UpdateChecker(
         } ?: return CheckResult.Failed("最新发布里没有可下载的 APK 安装包")
 
         val remoteVersion = normalizeVersion(release.tagName.ifBlank { release.name })
-        val localVersion = normalizeVersion(currentVersionName)
+        // 本地版本可能带构建后缀（如 0.1.31-debug）；它和稳定版 0.1.31 是同一发布，
+        // 不应被当作「更旧的预发布」而误报更新。这里只取数字核心做比较。
+        // 远端已在上面过滤掉 draft/prerelease，必为稳定版。
+        val localVersion = normalizeVersion(currentVersionName).substringBefore('-')
 
         return if (compareVersions(remoteVersion, localVersion) > 0) {
             CheckResult.Available(
@@ -159,27 +162,49 @@ class UpdateChecker(
     }.flowOn(Dispatchers.IO)
 
     companion object {
-        /** 去掉前缀 v / 构建后缀（如 -debug），只保留 x.y.z 形式的核心版本。 */
+        /** 去掉前缀 v 并保留预发布后缀（如 -beta、-rc、-debug）用于正确排序。 */
         fun normalizeVersion(raw: String): String {
             var s = raw.trim()
             if (s.startsWith("v", ignoreCase = true)) s = s.substring(1)
-            // 截断第一个 '-'（如 0.1.15-debug、1.0.0-beta）之后的内容
-            val dash = s.indexOf('-')
-            if (dash >= 0) s = s.substring(0, dash)
             return s.trim()
         }
 
         /** 语义化版本比较：返回 >0 表示 a 比 b 新，0 相等，<0 更旧。缺失段按 0 处理。 */
         fun compareVersions(a: String, b: String): Int {
-            val pa = a.split('.').map { it.toIntOrNull() ?: 0 }
-            val pb = b.split('.').map { it.toIntOrNull() ?: 0 }
-            val n = maxOf(pa.size, pb.size)
+            val pa = parseVersion(a)
+            val pb = parseVersion(b)
+            val n = maxOf(pa.segments.size, pb.segments.size)
             for (i in 0 until n) {
-                val x = pa.getOrElse(i) { 0 }
-                val y = pb.getOrElse(i) { 0 }
+                val x = pa.segments.getOrElse(i) { 0 }
+                val y = pb.segments.getOrElse(i) { 0 }
                 if (x != y) return x.compareTo(y)
             }
-            return 0
+
+            val preA = pa.prerelease
+            val preB = pb.prerelease
+            return when {
+                preA == null && preB == null -> 0
+                preA == null -> 1
+                preB == null -> -1
+                else -> preA.compareTo(preB)
+            }
+        }
+
+        private data class ParsedVersion(
+            val segments: List<Int>,
+            val prerelease: String?
+        )
+
+        private fun parseVersion(raw: String): ParsedVersion {
+            val normalized = normalizeVersion(raw)
+            val dash = normalized.indexOf('-')
+            val core = if (dash >= 0) normalized.substring(0, dash) else normalized
+            val prerelease = if (dash >= 0) normalized.substring(dash + 1).trim() else null
+            val segments = core.trim()
+                .split('.')
+                .map { it.trim().toIntOrNull() ?: 0 }
+                .ifEmpty { listOf(0) }
+            return ParsedVersion(segments, prerelease)
         }
     }
 }
