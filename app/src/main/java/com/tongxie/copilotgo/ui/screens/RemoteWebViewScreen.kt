@@ -31,19 +31,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imeAnimationTarget
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.shape.CircleShape
@@ -107,7 +103,7 @@ private val EmbedOnBgDim = Color(0xFF8B949E)
  * - 登录态：CookieManager 持久化（含第三方 cookie），onPause/销毁时 flush 落盘。
  * - 文件上传桥接、外链交系统、下载交系统、主框架错误重试。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun RemoteWebViewScreen(
@@ -216,15 +212,10 @@ fun RemoteWebViewScreen(
         applyImmersive(webView, immersive)
     }
 
-    // 本页用「边到边 + Compose 物理收缩 WebView」方案处理软键盘：
-    //   - decorFitsSystemWindows=false：边到边；软键盘改用 ADJUST_NOTHING，系统不再 pan/resize 窗口，
-    //     键盘适配完全交给 Compose（单一来源，避免系统+Compose 双重缩放打架）。
-    //   - 下方 WebView 容器用 windowInsetsPadding(imeAnimationTarget ∪ navigationBars) 把 WebView 实际
-    //     高度收缩到键盘上沿之上。这样网页里 position:fixed;bottom:0 的输入框就渲染在 WebView 底部
-    //     = 键盘正上方，且 fixed 定位翻看历史滚动时不动 → 始终钉住不掉下去。
-    //   - 用 imeAnimationTarget（键盘最终高度，一次布局到位）而非 ime（逐帧动画值），避免 Chromium
-    //     每帧重排整页导致的卡死/迟滞。
-    //   - 顶栏：边到边下系统不再自动下移内容，故下方 Column 顶部补一段「状态栏高度」占位条。
+    // 本页用「系统原生窗口适配」：decorFitsSystemWindows=true + ADJUST_RESIZE。
+    // 键盘弹出时由系统缩小窗口内容区 → Compose 的 weight(1f) WebView 随之变矮 →
+    // github.com/copilot 自身是响应式布局，底部输入框会自动浮到键盘上方（可见可编辑）。
+    // 这是 WebView 处理软键盘最稳的原生方案；本页没有用 imePadding，不存在逐帧重排卡顿。
     // 同时直接给系统状态栏/导航栏上深色，保持一体化观感。离开本页时全部还原。
     DisposableEffect(Unit) {
         val window = (context as? android.app.Activity)?.window
@@ -236,10 +227,10 @@ fun RemoteWebViewScreen(
         val previousSoftInput = window?.attributes?.softInputMode
 
         if (window != null) {
-            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowCompat.setDecorFitsSystemWindows(window, true)
             @Suppress("DEPRECATION") run { window.statusBarColor = EmbedBarBg.toArgb() }
             @Suppress("DEPRECATION") run { window.navigationBarColor = EmbedBg.toArgb() }
-            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
         controller?.isAppearanceLightStatusBars = false
         controller?.isAppearanceLightNavigationBars = false
@@ -311,15 +302,10 @@ fun RemoteWebViewScreen(
             .background(EmbedBg)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 边到边（decorFitsSystemWindows=false）下系统不再自动把内容下移到状态栏下方，
-            // 因此这里补一段「状态栏高度」的占位条（染成 EmbedBarBg），让纤细顶栏紧贴状态栏正下方。
-            // 沉浸模式隐藏系统栏时，statusBars inset 变 0，占位条自动收成 0，不会留白。
-            Spacer(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .windowInsetsTopHeight(WindowInsets.statusBars)
-                    .background(EmbedBarBg)
-            )
+            // 注意：本页 decorFitsSystemWindows=true，系统已自动把内容下移到状态栏「下方」，
+            // 且状态栏本身已染成 EmbedBarBg（见原生窗口适配 DisposableEffect）。因此这里
+            // 不能再额外补一段「状态栏高度」的占位条，否则会在顶部多叠加一整个状态栏高度的
+            // 深色块（顶栏看着变细了、总高度却没降）。直接让纤细顶栏紧贴系统状态栏下方即可。
             // 纤细顶栏：在 Column 布局流内，固定在状态栏正下方、网页内容区「上方」。
             // 因为它占据自己的布局高度（而非覆盖在网页上），WebView 从它「下方」开始，
             // 网页（含 Copilot 自身顶部菜单）永远不会被遮挡。固定显示、无高度动画，避免
@@ -437,11 +423,6 @@ fun RemoteWebViewScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    // 物理收缩 WebView 到键盘上沿之上：网页底部 position:fixed 输入框随之渲染在
-                    // WebView 底部 = 键盘正上方，翻看历史滚动时 fixed 不动 → 始终钉住。用 imeAnimationTarget
-                    // （键盘最终高度，一次到位）而非逐帧 ime，避免 Chromium 每帧重排卡顿。键盘收起时该值为
-                    // 0，与导航栏 inset 取并集，保证网页底部不被手势条压住。
-                    .windowInsetsPadding(WindowInsets.imeAnimationTarget.union(WindowInsets.navigationBars))
             ) {
             AndroidView(
                 factory = { swipeRefresh },
