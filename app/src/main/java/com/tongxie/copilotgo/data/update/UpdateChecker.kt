@@ -8,9 +8,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
+import okhttp3.Authenticator
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
+import java.net.Proxy
 
 /**
  * 应用内更新检查器：从 GitHub Releases 拉取最新版本，比较语义化版本号，
@@ -77,7 +81,10 @@ class UpdateChecker(
             .header("X-GitHub-Api-Version", "2022-11-28")
             .get()
             .build()
-        val resp = httpProvider.client.newCall(req).executeAsync()
+        // GitHub 是公网服务：优先「直连」，这样无论在哪个网络都能更新；
+        // 直连失败（如所在网络屏蔽 github）再回退走用户配置的代理。
+        // 这样避免「Copilot 代理指向局域网 IP → 离开该网络后无法检查更新」的问题。
+        val resp = executeWithFallback(req)
         resp.use {
             if (it.code == 404) error("尚未发布任何 Release")
             if (!it.isSuccessful) error("GitHub 返回 ${it.code}")
@@ -87,13 +94,43 @@ class UpdateChecker(
         }
     }
 
+    /** 直连优先、代理回退地执行请求，返回首个成功的响应；全部失败则抛最后一个异常。 */
+    private suspend fun executeWithFallback(req: Request): Response {
+        var last: Throwable? = null
+        for (c in clientsToTry()) {
+            try {
+                val resp = c.newCall(req).executeAsync()
+                if (resp.isSuccessful || resp.code == 404) return resp
+                last = IllegalStateException("HTTP ${resp.code}")
+                resp.close()
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw last ?: IllegalStateException("网络错误")
+    }
+
+    /**
+     * 候选客户端：始终先尝试「无代理直连」；若用户启用了代理，再把代理客户端作为回退。
+     * 直连客户端从代理客户端派生（复用超时/拦截器等基础配置），仅强制 NO_PROXY 并清掉代理鉴权。
+     */
+    private fun clientsToTry(): List<OkHttpClient> {
+        val proxyClient = httpProvider.client
+        val direct = proxyClient.newBuilder()
+            .proxy(Proxy.NO_PROXY)
+            .proxyAuthenticator(Authenticator.NONE)
+            .build()
+        val usingProxy = proxyClient.proxy?.let { it.type() != Proxy.Type.DIRECT } ?: false
+        return if (usingProxy) listOf(direct, proxyClient) else listOf(direct)
+    }
+
     /** 流式下载 APK 到 [targetFile]，发射进度与完成事件。失败抛异常。 */
     fun download(url: String, targetFile: File): Flow<DownloadEvent> = flow {
         targetFile.parentFile?.mkdirs()
         if (targetFile.exists()) targetFile.delete()
 
         val req = Request.Builder().url(url.toHttpUrl()).get().build()
-        val resp = httpProvider.client.newCall(req).executeAsync()
+        val resp = executeWithFallback(req)
         resp.use { r ->
             if (!r.isSuccessful) error("下载失败：HTTP ${r.code}")
             val body = r.body ?: error("下载失败：响应体为空")

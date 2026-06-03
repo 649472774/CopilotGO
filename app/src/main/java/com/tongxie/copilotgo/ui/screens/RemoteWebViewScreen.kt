@@ -172,7 +172,6 @@ fun RemoteWebViewScreen(
             canGoBack = v.canGoBack()
             applyImmersive(v, immersive)
             applyEnterAsNewline(v)
-            applyKeyboardComposerPin(v)
         }
         RemoteWebHolder.onHistory = { v -> canGoBack = v.canGoBack() }
         RemoteWebHolder.onMainError = { msg ->
@@ -186,7 +185,6 @@ fun RemoteWebViewScreen(
             if (p >= 60) {
                 applyImmersive(webView, immersive)
                 applyEnterAsNewline(webView)
-                applyKeyboardComposerPin(webView)
             }
         }
         RemoteWebHolder.onFileChooser = fc@{ callback, intent ->
@@ -214,9 +212,10 @@ fun RemoteWebViewScreen(
         applyImmersive(webView, immersive)
     }
 
-    // 本页改用「系统原生窗口适配」：decorFitsSystemWindows=true + ADJUST_NOTHING，
-    // 键盘弹出时窗口不缩放（避免 WebView 整体重排卡顿），改由注入的 JS（applyKeyboardComposerPin）
-    // 借助 visualViewport 把输入框上移到键盘之上；如此既不卡，又能保证上滑看历史时输入框不被键盘遮挡。
+    // 本页用「系统原生窗口适配」：decorFitsSystemWindows=true + ADJUST_RESIZE。
+    // 键盘弹出时由系统缩小窗口内容区 → Compose 的 weight(1f) WebView 随之变矮 →
+    // github.com/copilot 自身是响应式布局，底部输入框会自动浮到键盘上方（可见可编辑）。
+    // 这是 WebView 处理软键盘最稳的原生方案；本页没有用 imePadding，不存在逐帧重排卡顿。
     // 同时直接给系统状态栏/导航栏上深色，保持一体化观感。离开本页时全部还原。
     DisposableEffect(Unit) {
         val window = (context as? android.app.Activity)?.window
@@ -231,7 +230,7 @@ fun RemoteWebViewScreen(
             WindowCompat.setDecorFitsSystemWindows(window, true)
             @Suppress("DEPRECATION") run { window.statusBarColor = EmbedBarBg.toArgb() }
             @Suppress("DEPRECATION") run { window.navigationBarColor = EmbedBg.toArgb() }
-            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
         controller?.isAppearanceLightStatusBars = false
         controller?.isAppearanceLightNavigationBars = false
@@ -723,73 +722,6 @@ private fun applyEnterAsNewline(webView: WebView) {
               if (!ok) { try { document.execCommand('insertText', false, '\n'); } catch (err2) {} }
             }
           }, true);
-        })();
-    """.trimIndent()
-    runCatching { webView.evaluateJavascript(js, null) }
-}
-
-/**
- * 键盘弹出时把「输入框」上移到键盘之上（配合窗口 ADJUST_NOTHING：窗口不缩放，避免 WebView 卡顿）。
- * 原理：用 window.visualViewport 估算键盘高度 kb = innerHeight - vv.height - vv.offsetTop；
- * 找到当前聚焦可编辑元素最近的 fixed/sticky 祖先（Copilot 的底部输入条），对其施加
- * translateY(-kb)，并在 visualViewport 的 resize/scroll、页面滚动时持续重算，保证上滑看历史时
- * 输入框始终悬浮在键盘上方、不被遮挡。失焦或键盘收起时还原。监听只绑定一次，SPA 切换持续有效。
- */
-private fun applyKeyboardComposerPin(webView: WebView) {
-    val js = """
-        (function(){
-          if (window.__cgKbPin) return;
-          var vv = window.visualViewport;
-          if (!vv) return;
-          window.__cgKbPin = true;
-          var pinned = null;
-          function activeEditable(){
-            var el = document.activeElement;
-            if (!el) return null;
-            var tag = (el.tagName || '').toLowerCase();
-            if (tag === 'textarea' || tag === 'input' || el.isContentEditable) return el;
-            return null;
-          }
-          function findPinAncestor(el){
-            var node = el;
-            while (node && node.nodeType === 1 && node !== document.body) {
-              var cs;
-              try { cs = window.getComputedStyle(node); } catch (e) { return null; }
-              if (cs && (cs.position === 'fixed' || cs.position === 'sticky')) return node;
-              node = node.parentElement;
-            }
-            return null;
-          }
-          function clearPin(){
-            if (pinned){
-              try {
-                pinned.style.transform = pinned.__cgPrevTransform || '';
-                pinned.style.transition = pinned.__cgPrevTransition || '';
-              } catch (e) {}
-              pinned = null;
-            }
-          }
-          function update(){
-            var ed = activeEditable();
-            if (!ed){ clearPin(); return; }
-            var kb = Math.round(window.innerHeight - vv.height - vv.offsetTop);
-            if (kb < 60){ clearPin(); return; }
-            var target = findPinAncestor(ed);
-            if (!target){ clearPin(); return; }
-            if (pinned && pinned !== target) clearPin();
-            if (!pinned){
-              pinned = target;
-              pinned.__cgPrevTransform = pinned.style.transform || '';
-              pinned.__cgPrevTransition = pinned.style.transition || '';
-              pinned.style.transition = 'transform 0.12s ease-out';
-            }
-            pinned.style.transform = 'translateY(' + (-kb) + 'px)';
-          }
-          vv.addEventListener('resize', update);
-          vv.addEventListener('scroll', update);
-          window.addEventListener('scroll', update, true);
-          document.addEventListener('focusin', function(){ setTimeout(update, 0); }, true);
-          document.addEventListener('focusout', function(){ setTimeout(update, 50); }, true);
         })();
     """.trimIndent()
     runCatching { webView.evaluateJavascript(js, null) }
