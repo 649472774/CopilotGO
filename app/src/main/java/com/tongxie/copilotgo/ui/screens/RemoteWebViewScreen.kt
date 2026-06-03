@@ -34,16 +34,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.shape.CircleShape
@@ -107,7 +104,7 @@ private val EmbedOnBgDim = Color(0xFF8B949E)
  * - 登录态：CookieManager 持久化（含第三方 cookie），onPause/销毁时 flush 落盘。
  * - 文件上传桥接、外链交系统、下载交系统、主框架错误重试。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun RemoteWebViewScreen(
@@ -176,6 +173,7 @@ fun RemoteWebViewScreen(
             canGoBack = v.canGoBack()
             applyImmersive(v, immersive)
             applyEnterAsNewline(v)
+            applyViewportKeyboardFix(v)
         }
         RemoteWebHolder.onHistory = { v -> canGoBack = v.canGoBack() }
         RemoteWebHolder.onMainError = { msg ->
@@ -189,6 +187,7 @@ fun RemoteWebViewScreen(
             if (p >= 60) {
                 applyImmersive(webView, immersive)
                 applyEnterAsNewline(webView)
+                applyViewportKeyboardFix(webView)
             }
         }
         RemoteWebHolder.onFileChooser = fc@{ callback, intent ->
@@ -216,17 +215,14 @@ fun RemoteWebViewScreen(
         applyImmersive(webView, immersive)
     }
 
-    // 本页改用「边到边 + 应用自管 IME 内边距」方案处理软键盘（更稳，能解决滚动历史时输入框
-    // 又被键盘挡住的问题）：
-    //   - decorFitsSystemWindows=false：窗口不再因键盘整体缩放/平移（系统的 ADJUST_RESIZE 会让
-    //     Chromium 仍按「大视口 100vh」给底部输入框定位，聚焦时浏览器把它临时滚进可视区，但用户
-    //     一滑动看历史就又回到 100vh 底部 → 被键盘遮住）。
-    //   - 由 Compose 给 WebView 容器加 imePadding（见下方 weight(1f) 的 Box）：键盘弹出时我们把
-    //     WebView 这个 Android view 的物理高度直接收缩到键盘上方。WebView 物理变矮 → Chromium 重算
-    //     布局视口与 100vh → 底部输入框落在更矮视口的底部（键盘上方），且键盘下方根本没有 WebView
-    //     像素，无论怎么滚动，输入框都不可能再被推到键盘下面。
-    //   - 顶栏：边到边下系统不再自动下移内容，所以下面 Column 顶部补一段「状态栏高度」的占位条
-    //     （染成 EmbedBarBg），让纤细顶栏紧贴状态栏下方。沉浸模式隐藏系统栏时占位条会自动收成 0。
+    // 本页用「边到边 + 网页引擎自管软键盘」方案：
+    //   - decorFitsSystemWindows=false：边到边，系统不因键盘整体缩放窗口；IME inset 会正常下发到
+    //     WebView，供 Chromium 读取键盘高度。
+    //   - 不再由 Compose 用 imePadding 逐帧收缩 WebView（那会让 Chromium 每帧重排整页 → 卡死，
+    //     且仍解决不了「翻看历史时输入框被滚走」）。改为注入 viewport 的 interactive-widget=
+    //     resizes-content（见 applyViewportKeyboardFix）：键盘弹出时 Chromium 自己收缩「布局视口」，
+    //     github.com/copilot 的底部输入框 position:fixed 钉在键盘上方、滚动历史也不掉下去，且原生丝滑。
+    //   - 顶栏：边到边下系统不再自动下移内容，故下方 Column 顶部补一段「状态栏高度」占位条。
     // 同时直接给系统状态栏/导航栏上深色，保持一体化观感。离开本页时全部还原。
     DisposableEffect(Unit) {
         val window = (context as? android.app.Activity)?.window
@@ -439,16 +435,13 @@ fun RemoteWebViewScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    // 关键：把 WebView 容器的物理高度收缩到「键盘 + 导航栏」之上。
-                    // 用 imeAnimationTarget（键盘的「最终目标高度」）而非 ime（逐帧动画值）：
-                    // 后者会在键盘 ~300ms 弹出动画里每一帧都改变 padding → WebView 每帧重排整页 →
-                    // 卡死/极慢。改用 target 后，padding 一步跳到最终高度，WebView 只重排一次。
-                    // 这正是 Via 等轻量浏览器的做法：网页内容直接「snap」到键盘上方的最终尺寸，
-                    // 键盘动画滑上来时内容已经就位，没有逐帧重排，丝滑不卡。
-                    // union 取两者每条边的较大值：键盘收起=导航栏高度；键盘弹出=键盘高度（此时
-                    // 导航栏被键盘盖住，inset 归 0），不会重复叠加。WebView 物理变矮后 Chromium
-                    // 重算 100vh，底部输入框稳定落在键盘上方，滚动历史也不会再被遮挡。
-                    .windowInsetsPadding(WindowInsets.imeAnimationTarget.union(WindowInsets.navigationBars))
+                    // 键盘交给「网页引擎」自己处理（参考 Via 等轻量浏览器：不让原生逐帧缩放 WebView，
+                    // 而是把软键盘当作浏览器视口事件，由 Chromium 用 interactive-widget=resizes-content
+                    // 收缩「布局视口」→ github.com/copilot 的底部输入框 position:fixed 钉在收缩后的视口
+                    // 底部 = 键盘上方，且翻看历史滚动时始终钉住不掉下去。引擎原生处理，丝滑无逐帧重排。
+                    // 这里只补「导航栏」内边距（键盘收起时让网页底部不被手势条压住）；键盘弹出时导航栏
+                    // inset 归 0，WebView 直达键盘上沿，由引擎接管。viewport 注入见 applyViewportKeyboardFix。
+                    .windowInsetsPadding(WindowInsets.navigationBars)
             ) {
             AndroidView(
                 factory = { swipeRefresh },
@@ -748,6 +741,44 @@ private fun applyEnterAsNewline(webView: WebView) {
               if (!ok) { try { document.execCommand('insertText', false, '\n'); } catch (err2) {} }
             }
           }, true);
+        })();
+    """.trimIndent()
+    runCatching { webView.evaluateJavascript(js, null) }
+}
+
+/**
+ * 让「网页引擎」原生处理软键盘：把 viewport 的 interactive-widget 设为 resizes-content。
+ * 这样键盘弹出时 Chromium 会收缩页面的「布局视口」（而非仅视觉视口），github.com/copilot 的
+ * 底部输入条（position:fixed; bottom:0）就钉在收缩后的视口底部 = 键盘正上方；翻看历史滚动时
+ * fixed 元素锚定布局视口，不会随滚动掉到键盘下面。整页由引擎一次性适配，原生丝滑、无逐帧重排。
+ * 注：用 MutationObserver 兜底——SPA 若重写 head 里的 viewport meta，会被重新补上该指令。
+ * 监听只装一次（按 window 去重）。
+ */
+private fun applyViewportKeyboardFix(webView: WebView) {
+    val js = """
+        (function(){
+          function ensure(){
+            var m = document.querySelector('meta[name=viewport]');
+            if(!m){
+              m = document.createElement('meta');
+              m.setAttribute('name','viewport');
+              (document.head||document.documentElement).appendChild(m);
+            }
+            var c = m.getAttribute('content') || 'width=device-width, initial-scale=1';
+            var want = 'interactive-widget=resizes-content';
+            if(c.indexOf('interactive-widget') === -1){
+              m.setAttribute('content', c + ', ' + want);
+            } else if(c.indexOf(want) === -1){
+              m.setAttribute('content', c.replace(/interactive-widget=[^,]*/, want));
+            }
+          }
+          ensure();
+          if(!window.__cgViewportKbObs && document.head){
+            try {
+              window.__cgViewportKbObs = new MutationObserver(function(){ ensure(); });
+              window.__cgViewportKbObs.observe(document.head, {childList:true, subtree:true, attributes:true});
+            } catch(e) {}
+          }
         })();
     """.trimIndent()
     runCatching { webView.evaluateJavascript(js, null) }
