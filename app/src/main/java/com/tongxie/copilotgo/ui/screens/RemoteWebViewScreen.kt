@@ -226,39 +226,55 @@ fun RemoteWebViewScreen(
     // 键盘弹出时由系统缩小窗口内容区 → Compose 的 weight(1f) WebView 随之变矮 →
     // github.com/copilot 自身是响应式布局，底部输入框会自动浮到键盘上方（可见可编辑）。
     // 这是 WebView 处理软键盘最稳的原生方案；本页没有用 imePadding，不存在逐帧重排卡顿。
-    // 同时直接给系统状态栏/导航栏上深色，保持一体化观感。离开本页时全部还原。
+    // 同时直接给系统状态栏/导航栏上深色，保持一体化观感。
+    //
+    // 关键：以上都是 Activity「全局」窗口状态。若只在 onDispose 里还原，返回会话列表时，
+    // 列表会先用本页的窗口配置渲染一帧（状态栏被染成深色 EmbedBarBg + decorFitsSystemWindows=true
+    // 多出状态栏占位）→ 顶部闪出一条黑边并触发列表重排。因此把还原提取成 restoreImmersiveWindow()，
+    // 在退出回调里「先同步还原、再导航」，让会话列表第一帧就是干净的边到边状态；onDispose 仅作幂等兜底。
+    val activity = context as? android.app.Activity
+    val appWindow = activity?.window
+    val insetsController = appWindow?.let { WindowCompat.getInsetsController(it, view) }
+    val savedWindow = remember { mutableStateOf<SavedWindowState?>(null) }
+    val windowRestored = remember { mutableStateOf(false) }
+
+    fun restoreImmersiveWindow() {
+        if (windowRestored.value) return
+        val saved = savedWindow.value ?: return
+        if (appWindow != null) {
+            WindowCompat.setDecorFitsSystemWindows(appWindow, false)
+            @Suppress("DEPRECATION") run {
+                saved.statusColor?.let { appWindow.statusBarColor = it }
+                saved.navColor?.let { appWindow.navigationBarColor = it }
+            }
+            saved.softInput?.let { appWindow.setSoftInputMode(it) }
+        }
+        if (insetsController != null) {
+            saved.lightStatus?.let { insetsController.isAppearanceLightStatusBars = it }
+            saved.lightNav?.let { insetsController.isAppearanceLightNavigationBars = it }
+        }
+        windowRestored.value = true
+    }
+
     DisposableEffect(Unit) {
-        val window = (context as? android.app.Activity)?.window
-        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
-        val previousLightStatus = controller?.isAppearanceLightStatusBars
-        val previousLightNav = controller?.isAppearanceLightNavigationBars
-        @Suppress("DEPRECATION") val previousStatusColor = window?.statusBarColor
-        @Suppress("DEPRECATION") val previousNavColor = window?.navigationBarColor
-        val previousSoftInput = window?.attributes?.softInputMode
-
-        if (window != null) {
-            WindowCompat.setDecorFitsSystemWindows(window, true)
-            @Suppress("DEPRECATION") run { window.statusBarColor = EmbedBarBg.toArgb() }
-            @Suppress("DEPRECATION") run { window.navigationBarColor = EmbedBg.toArgb() }
-            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        if (appWindow != null) {
+            @Suppress("DEPRECATION")
+            savedWindow.value = SavedWindowState(
+                lightStatus = insetsController?.isAppearanceLightStatusBars,
+                lightNav = insetsController?.isAppearanceLightNavigationBars,
+                statusColor = appWindow.statusBarColor,
+                navColor = appWindow.navigationBarColor,
+                softInput = appWindow.attributes?.softInputMode
+            )
+            WindowCompat.setDecorFitsSystemWindows(appWindow, true)
+            @Suppress("DEPRECATION") run { appWindow.statusBarColor = EmbedBarBg.toArgb() }
+            @Suppress("DEPRECATION") run { appWindow.navigationBarColor = EmbedBg.toArgb() }
+            appWindow.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            insetsController?.isAppearanceLightStatusBars = false
+            insetsController?.isAppearanceLightNavigationBars = false
+            windowRestored.value = false
         }
-        controller?.isAppearanceLightStatusBars = false
-        controller?.isAppearanceLightNavigationBars = false
-
-        onDispose {
-            if (window != null) {
-                WindowCompat.setDecorFitsSystemWindows(window, false)
-                @Suppress("DEPRECATION") run {
-                    if (previousStatusColor != null) window.statusBarColor = previousStatusColor
-                    if (previousNavColor != null) window.navigationBarColor = previousNavColor
-                }
-                if (previousSoftInput != null) window.setSoftInputMode(previousSoftInput)
-            }
-            if (controller != null) {
-                if (previousLightStatus != null) controller.isAppearanceLightStatusBars = previousLightStatus
-                if (previousLightNav != null) controller.isAppearanceLightNavigationBars = previousLightNav
-            }
-        }
+        onDispose { restoreImmersiveWindow() }
     }
 
     // 生命周期：转发 onPause/onResume，并在 pause 时把 cookie 落盘
@@ -279,8 +295,14 @@ fun RemoteWebViewScreen(
         }
     }
 
+    // 退出到会话列表前，先同步还原全局窗口状态，再导航——避免列表顶部闪黑边/重排。
+    val exitToList = {
+        restoreImmersiveWindow()
+        onBack()
+    }
+
     BackHandler {
-        if (webView.canGoBack()) webView.goBack() else onBack()
+        if (webView.canGoBack()) webView.goBack() else exitToList()
     }
 
     if (showLogoutDialog) {
@@ -333,7 +355,7 @@ fun RemoteWebViewScreen(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .clickable { onBack() },
+                                .clickable { exitToList() },
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -507,6 +529,15 @@ fun RemoteWebViewScreen(
         }
     }
 }
+
+/** 进入 Remote 页前的 Activity 全局窗口状态快照，用于离开时同步还原（避免外部页面顶部闪黑边/重排）。 */
+private data class SavedWindowState(
+    val lightStatus: Boolean?,
+    val lightNav: Boolean?,
+    val statusColor: Int?,
+    val navColor: Int?,
+    val softInput: Int?
+)
 
 /**
  * 进程级单例：保活内嵌 Copilot 的 WebView，使「退出会话列表 → 再进入」时不重建、不重载，
