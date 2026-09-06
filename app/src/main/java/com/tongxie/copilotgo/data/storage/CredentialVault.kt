@@ -21,7 +21,10 @@ interface SecretVault {
 }
 
 /** Encrypted, non-backup namespaces; missing keys are errors, never a reset signal. */
-class CredentialVault(context: Context) : SecretVault {
+class CredentialVault(
+    context: Context,
+    private val keyAlias: String = DEFAULT_KEY_ALIAS
+) : SecretVault {
     private val directory = File(context.applicationContext.noBackupFilesDir, "credentials")
 
     override suspend fun read(name: String): String? = withContext(Dispatchers.IO) {
@@ -68,18 +71,21 @@ class CredentialVault(context: Context) : SecretVault {
 
     private fun key(create: Boolean): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        if (store.containsAlias(KEY_ALIAS)) {
-            return store.getKey(KEY_ALIAS, null) as? SecretKey
+        if (store.containsAlias(keyAlias)) {
+            return store.getKey(keyAlias, null) as? SecretKey
                 ?: throw IOException("凭据密钥不可用，原文件已保留")
         }
         val encryptedFiles = directory.listFiles { file -> file.extension == "enc" }
+        if (directory.exists() && encryptedFiles == null) {
+            throw IOException("无法读取加密凭据目录，未创建新密钥")
+        }
         if (!create || !encryptedFiles.isNullOrEmpty()) {
             throw IOException("凭据密钥丢失，原文件已保留")
         }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(
                 KeyGenParameterSpec.Builder(
-                    KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                    keyAlias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
                 )
                     .setKeySize(256)
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -91,7 +97,7 @@ class CredentialVault(context: Context) : SecretVault {
 
     companion object {
         private val mutex = Mutex()
-        private const val KEY_ALIAS = "copilotgo.credentials.v1"
+        private const val DEFAULT_KEY_ALIAS = "copilotgo.credentials.v1"
         private const val IV_BYTES = 12
         private const val MAX_BYTES = 64 * 1024
     }

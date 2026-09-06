@@ -3,11 +3,16 @@ package com.tongxie.copilotgo.data.chat
 import com.tongxie.copilotgo.data.Constants
 import com.tongxie.copilotgo.data.net.ApiException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.*
@@ -139,6 +144,64 @@ class CopilotChatClientTest {
                 fail("Account-bound stream survived logout")
             } catch (_: CancellationException) {
                 assertTrue(stream.isCancelled)
+            }
+        }
+    }
+
+    @Test
+    fun slowCollectorStillReceivesAllPartialDeltasBeforeFailure() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            val chunks = (1..20).joinToString("") {
+                "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
+            }
+            fixture.replies.add(CoreFixture.sse(chunks + "event: error\ndata: {}\n\n"))
+            val text = StringBuilder()
+            try {
+                fixture.client.streamChat(request).collect {
+                    delay(10)
+                    text.append(it.text)
+                }
+                fail("Expected terminal error")
+            } catch (_: ApiException) {
+                assertEquals("x".repeat(20), text.toString())
+            }
+        }
+    }
+
+    @Test
+    fun logoutInvalidatesCatalogBeforeAsynchronousObserversRun() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            fixture.catalog.refresh()
+            fixture.auth.logout()
+            try {
+                fixture.catalog.requireModel("fixture-chat", false)
+                fail("Old account catalog was usable after logout")
+            } catch (_: ModelUnavailableException) {
+                assertTrue(fixture.catalog.state.value.models.isEmpty())
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun delayedAccountObserverDoesNotDiscardFreshCatalogOfNewAccount() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            val scheduler = TestCoroutineScheduler()
+            val catalog = ModelCatalog(
+                fixture.client, fixture.json, fixture.auth,
+                scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
+            )
+            try {
+                val credentials = fixture.credentials.credentials
+                fixture.auth.logout()
+                fixture.credentials.credentials = credentials
+                catalog.refresh()
+                assertFalse(catalog.state.value.models.isEmpty())
+                scheduler.runCurrent()
+                assertFalse(catalog.state.value.models.isEmpty())
+            } finally {
+                catalog.close()
+                scheduler.runCurrent()
             }
         }
     }

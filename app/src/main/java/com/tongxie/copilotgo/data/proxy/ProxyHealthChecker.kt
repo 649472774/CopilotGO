@@ -90,14 +90,14 @@ class ProxyHealthChecker(
                         "常见原因：代理未启用、Clash 未运行、端口/host 填错\n" +
                         "模拟器 host 用 10.0.2.2；真机用 PC/路由器 LAN IP，或手机本机 Clash 才用 127.0.0.1"
             )
-        } catch (e: ConnectException) {
+        } catch (_: ConnectException) {
             Outcome.Err(
-                "❌ 无法连接代理：${e.message ?: "ConnectException"}\n" +
+                "❌ 无法连接当前网络或代理\n" +
                         "检查 Clash、端口和 host：模拟器 10.0.2.2；真机用 PC/路由器 LAN IP"
             )
-        } catch (e: UnknownHostException) {
+        } catch (_: UnknownHostException) {
             Outcome.Err(
-                "❌ DNS 解析失败：${e.message ?: "UnknownHostException"}\n" +
+                "❌ DNS 解析失败\n" +
                         "模拟器 host 用 10.0.2.2；真机用 PC/路由器 LAN IP，手机本机 Clash 才用 127.0.0.1"
             )
         } catch (_: Exception) {
@@ -132,10 +132,10 @@ class ProxyHealthChecker(
                 prefix + "✅ Copilot 可达：HTTP $code，${elapsed}ms\n端点：$apiBase"
             )
             code == 401 || code == 403 -> Outcome.Warn(
-                prefix + "⚠️ 代理已通到 Copilot（HTTP $code，${elapsed}ms）\n但 token 失效，请回设置-账号重新登录"
+                prefix + "⚠️ 已收到 Copilot 响应（HTTP $code，${elapsed}ms）\n账号未登录、凭据过期或没有访问权限，请检查账号"
             )
             code in 500..599 -> Outcome.Warn(
-                prefix + "⚠️ Copilot 服务端 $code，${elapsed}ms（代理工作正常，是服务端问题）"
+                prefix + "⚠️ 已收到 HTTP $code 响应，${elapsed}ms；服务暂不可用，请稍后重试"
             )
             else -> Outcome.Warn(
                 prefix + "⚠️ 异常响应：HTTP $code，${elapsed}ms\n可能被中间网关劫持（确认代理指向 Clash 而非系统 VPN）"

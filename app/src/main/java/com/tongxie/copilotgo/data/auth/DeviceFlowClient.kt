@@ -19,7 +19,8 @@ class DeviceFlowClient(
     private val json: Json,
     private val clientId: String = Constants.CLIENT_ID,
     private val deviceCodeUrl: String = Constants.GITHUB_DEVICE_CODE_URL,
-    private val accessTokenUrl: String = Constants.GITHUB_ACCESS_TOKEN_URL
+    private val accessTokenUrl: String = Constants.GITHUB_ACCESS_TOKEN_URL,
+    private val pollDelay: suspend (Long) -> Unit = { delay(it) }
 ) {
 
     suspend fun requestDeviceCode(scope: String = "read:user"): DeviceCodeResponse {
@@ -48,7 +49,7 @@ class DeviceFlowClient(
         val deadline = System.currentTimeMillis() + deviceCode.expiresIn * 1000L
         var interval = deviceCode.interval.coerceAtLeast(5)
         while (System.currentTimeMillis() < deadline) {
-            delay(interval * 1000L)
+            pollDelay(interval * 1000L)
             if (System.currentTimeMillis() >= deadline) break
             val resp = pollOnce(deviceCode.deviceCode)
             when {
