@@ -6,6 +6,7 @@ import com.tongxie.copilotgo.data.auth.AuthRepository
 import com.tongxie.copilotgo.data.auth.DeviceCodeResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -48,9 +49,14 @@ class AuthViewModel(private val auth: AuthRepository) : ViewModel() {
     }
 
     suspend fun logoutAndAwait() {
-        cancel()
-        auth.logout()
-        _deviceCode.value = null
+        try {
+            auth.logout()
+        } finally {
+            val login = pollJob
+            pollJob = null
+            _deviceCode.value = null
+            login?.cancelAndJoin()
+        }
     }
 
     fun logout() {

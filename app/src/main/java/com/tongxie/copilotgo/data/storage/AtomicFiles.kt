@@ -2,7 +2,14 @@ package com.tongxie.copilotgo.data.storage
 
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.StandardOpenOption.CREATE
+import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+import java.nio.file.StandardOpenOption.WRITE
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
@@ -17,17 +24,18 @@ internal object AtomicFiles {
     fun write(file: File, bytes: ByteArray, backup: Boolean = false) {
         ensureDirectory(requireNotNull(file.parentFile))
         val temporary = File(file.parentFile, "${file.name}.tmp")
-        temporary.outputStream().use { stream ->
-            stream.write(bytes)
-            stream.fd.sync()
+        FileChannel.open(temporary.toPath(), WRITE, CREATE, TRUNCATE_EXISTING, NOFOLLOW_LINKS).use { channel ->
+            val buffer = ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) channel.write(buffer)
+            channel.force(true)
         }
         if (backup && file.isFile) {
             val backupFile = File(file.parentFile, "${file.name}.bak")
             val backupTemporary = File(file.parentFile, "${file.name}.bak.tmp")
-            file.inputStream().use { input ->
-                backupTemporary.outputStream().use { output ->
-                    input.copyTo(output)
-                    output.fd.sync()
+            Files.newInputStream(file.toPath(), NOFOLLOW_LINKS).use { input ->
+                FileChannel.open(backupTemporary.toPath(), WRITE, CREATE, TRUNCATE_EXISTING, NOFOLLOW_LINKS).use { channel ->
+                    input.copyTo(Channels.newOutputStream(channel))
+                    channel.force(true)
                 }
             }
             replace(backupTemporary, backupFile)
@@ -42,7 +50,7 @@ internal object AtomicFiles {
 
     fun read(file: File, maxBytes: Int): ByteArray {
         if (file.length() > maxBytes) throw IOException("文件超过读取大小限制")
-        return file.inputStream().use { input ->
+        return Files.newInputStream(file.toPath(), NOFOLLOW_LINKS).use { input ->
             val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 8192))
             val buffer = ByteArray(8192)
             var total = 0

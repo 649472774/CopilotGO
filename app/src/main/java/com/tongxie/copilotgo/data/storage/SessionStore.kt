@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -132,12 +134,12 @@ class SessionStore(
             }.distinct()
             val result = mutableListOf<SessionSummary>()
             for (id in ids) {
+                currentCoroutineContext().ensureActive()
                 if (!validId(id)) {
                     report(StorageIssue(null, "发现不受支持的会话文件名，原文件已保留"))
                     continue
                 }
                 if (id in deleted || tombstone(id).exists()) {
-                    deleted.add(id)
                     continue
                 }
                 val live = synchronized(cacheGuard) { entries[id]?.current }
@@ -240,7 +242,7 @@ class SessionStore(
                 revision = current.revision + 1, updatedAt = System.currentTimeMillis()
             )
             if (persist) persistLocked(next)
-            publish(entry(id), next, dirty = !persist)
+            publish(entry(id), next, dirty = !persist, updateSummary = persist)
             snapshot(next)
         }
     }
@@ -252,6 +254,7 @@ class SessionStore(
             persistLocked(current)
             synchronized(cacheGuard) { entries[id]?.dirty = false }
             dirtyMigrations.remove(id)
+            publishSummaries(_summaries.value.filterNot { it.id == id } + summary(current))
         }
     }
 
@@ -306,6 +309,7 @@ class SessionStore(
         }
         dirtyMigrations.remove(id)
         publishSummaries(_summaries.value.filterNot { it.id == id })
+        deleted.remove(id)
     }
 
     suspend fun clearAll() = withContext(Dispatchers.IO) {
@@ -355,6 +359,7 @@ class SessionStore(
         markDeleting(id)
         AtomicFiles.write(tombstone(id), byteArrayOf(1))
         publishSummaries(_summaries.value.filterNot { it.id == id })
+        deleted.remove(id)
     }
 
     private fun persistLocked(session: Session) {
@@ -477,14 +482,16 @@ class SessionStore(
         }
     }
 
-    private fun publish(entry: Entry, session: Session, dirty: Boolean) {
+    private fun publish(entry: Entry, session: Session, dirty: Boolean, updateSummary: Boolean = true) {
         synchronized(cacheGuard) {
             entry.current = session
             entry.dirty = dirty
             entry.flow.value = snapshot(session)
             entry.loadState.value = SessionLoadState.Ready
         }
-        publishSummaries(_summaries.value.filterNot { it.id == session.id } + summary(session))
+        if (updateSummary) {
+            publishSummaries(_summaries.value.filterNot { it.id == session.id } + summary(session))
+        }
     }
 
     private fun publishSummaries(values: List<SessionSummary>) {

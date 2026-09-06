@@ -3,7 +3,6 @@ package com.tongxie.copilotgo.data.net
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Response
 import java.io.IOException
 import java.net.SocketTimeoutException

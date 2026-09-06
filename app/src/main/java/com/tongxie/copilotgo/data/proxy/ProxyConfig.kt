@@ -1,6 +1,7 @@
 package com.tongxie.copilotgo.data.proxy
 
 import kotlinx.serialization.Serializable
+import okhttp3.HttpUrl
 
 enum class ProxyType { HTTP, SOCKS5 }
 
@@ -22,6 +23,12 @@ data class ProxyConfig(
         if (trimmedHost.contains(Regex("\\s")) || trimmedHost.contains("/") || trimmedHost.contains("://")) {
             return false
         }
-        return trimmedHost.split('.').all { it.isNotEmpty() }
+        if (!trimmedHost.split('.').all { it.isNotEmpty() }) return false
+        return try {
+            HttpUrl.Builder().scheme("http").host(trimmedHost).port(port).build()
+            true
+        } catch (_: IllegalArgumentException) {
+            false
+        }
     }
 }
