@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Android quality and CI validation APK
 
 on:
   push:
@@ -7,64 +7,107 @@ on:
     branches: [main]
   workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
 
+concurrency:
+  group: android-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
-      - name: Setup Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      - name: Set up Gradle and validate wrapper
+        uses: gradle/actions/setup-gradle@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
 
-      - name: Grant gradlew exec
-        run: chmod +x gradlew
-
-      - name: Build debug APK
-        run: ./gradlew --no-daemon --console=plain assembleDebug --stacktrace
-
-      - name: Run unit tests
-        run: ./gradlew --no-daemon --console=plain testDebugUnitTest
-
-      - name: Read version
-        id: ver
+      - name: Build, unit tests, lint and instrumentation compilation
         run: |
-          NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
-          CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts | head -1)
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-          echo "code=$CODE" >> $GITHUB_OUTPUT
+          chmod +x gradlew
+          ./gradlew --no-daemon --console=plain --max-workers=2 \
+            assembleDebug testDebugUnitTest lintDebug compileDebugAndroidTestKotlin --stacktrace
 
-      - name: Upload APK artifact
+      - name: Record CI-only artifact provenance
+        id: artifact
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, shutil, subprocess
+          source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          output = pathlib.Path("app/build/ci-artifacts")
+          output.mkdir(parents=True, exist_ok=True)
+          apk = output / "CopilotGo-ci-validation.apk"
+          shutil.copyfile("app/build/outputs/apk/debug/app-debug.apk", apk)
+          tools = pathlib.Path(os.environ["ANDROID_HOME"]) / "build-tools/36.0.0"
+          verification = subprocess.check_output([str(tools / "apksigner"), "verify", "--print-certs", str(apk)], text=True)
+          certificates = re.findall(r"Signer #\d+ certificate SHA-256 digest: ([a-fA-F0-9]{64})", verification)
+          if len(certificates) != 1:
+              raise RuntimeError("Expected one verified APK signer")
+          badging = subprocess.check_output([str(tools / "aapt2"), "dump", "badging", str(apk)], text=True)
+          identity = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
+          if identity is None or identity[1] != "com.tongxie.copilotgo.debug":
+              raise RuntimeError("Unexpected APK identity")
+          min_sdk = re.search(r"^(?:minSdkVersion|sdkVersion):'(\d+)'", badging, re.MULTILINE)
+          target_sdk = re.search(r"^targetSdkVersion:'(\d+)'", badging, re.MULTILINE)
+          if min_sdk is None or target_sdk is None or int(min_sdk[1]) != 31 or int(target_sdk[1]) != 36:
+              raise RuntimeError("Unexpected APK SDK compatibility")
+          with apk.open("rb") as source_apk:
+              digest = hashlib.file_digest(source_apk, "sha256").hexdigest()
+          manifest = {
+              "provenance": "ci-validation-only",
+              "sourceCommit": source,
+              "applicationId": identity[1],
+              "versionCode": int(identity[2]),
+              "versionName": identity[3],
+              "minSdk": int(min_sdk[1]),
+              "targetSdk": int(target_sdk[1]),
+              "apkSha256": digest,
+              "certificateSha256": certificates[0].lower(),
+              "upgradeCompatible": False,
+              "warning": "Ephemeral runner debug key. Not a drop-in update for the published/local debug installation. Do not uninstall or wipe app data to install this artifact.",
+          }
+          (output / "build-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          (output / "SHA256SUMS").write_text(f"{digest}  {apk.name}\n", encoding="ascii")
+          (output / "READ-ME-FIRST.txt").write_text(manifest["warning"] + "\nSource: " + source + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as result:
+              result.write(f"short_sha={source[:12]}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("### CI validation APK, not an update release\n" + manifest["warning"] + "\n\n")
+              summary.write(f"Source: `{source}`\n\nAPK SHA-256: `{digest}`\n")
+          PY
+
+      - name: Upload explicitly labeled CI validation bundle
         uses: actions/upload-artifact@v4
         with:
-          name: CopilotGo-v${{ steps.ver.outputs.name }}-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: CopilotGo-ci-validation-${{ steps.artifact.outputs.short_sha }}
+          path: app/build/ci-artifacts/
           if-no-files-found: error
-          retention-days: 5
+          retention-days: 7
 
-      - name: Upload unit test report (on failure)
-        if: failure()
+      - name: Upload quality reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-report
-          path: app/build/reports/tests/testDebugUnitTest/
-          if-no-files-found: ignore
+          name: android-quality-reports-${{ github.run_id }}
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+          retention-days: 7
