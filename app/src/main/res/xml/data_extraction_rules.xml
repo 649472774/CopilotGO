@@ -1,11 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
-    <cloud-backup>
-        <exclude domain="sharedpref" path="device.preferences_pb" />
-        <exclude domain="sharedpref" path="copilot_token.preferences_pb" />
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
+        <exclude domain="file" path="datastore/" />
+        <exclude domain="file" path="credentials/" />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="root" path="app_webview/" />
+        <exclude domain="device_file" path="datastore/" />
+        <exclude domain="device_file" path="credentials/" />
+        <exclude domain="device_sharedpref" path="." />
+        <exclude domain="external" path="update/" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="sharedpref" path="device.preferences_pb" />
-        <exclude domain="sharedpref" path="copilot_token.preferences_pb" />
+        <exclude domain="file" path="datastore/" />
+        <exclude domain="file" path="credentials/" />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="root" path="app_webview/" />
+        <exclude domain="device_file" path="datastore/" />
+        <exclude domain="device_file" path="credentials/" />
+        <exclude domain="device_sharedpref" path="." />
+        <exclude domain="external" path="update/" />
     </device-transfer>
 </data-extraction-rules>
