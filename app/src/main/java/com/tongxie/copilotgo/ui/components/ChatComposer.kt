@@ -1,0 +1,185 @@
+package com.tongxie.copilotgo.ui.components
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import com.tongxie.copilotgo.R
+
+object ChatTags {
+    const val INPUT = "chat_input"
+    const val SEND = "chat_send"
+    const val STOP = "chat_stop"
+    const val ADD = "chat_add"
+    const val ATTACHMENTS = "chat_attachments"
+    const val MESSAGES = "chat_messages"
+    const val LATEST = "chat_latest"
+}
+
+@Composable
+fun ChatComposer(
+    text: String,
+    attachments: List<UiAttachment>,
+    onTextChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+    onPickText: () -> Unit,
+    onPickImages: () -> Unit,
+    onVoice: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onPreviewAttachment: (UiAttachment) -> Unit,
+    modifier: Modifier = Modifier,
+    sending: Boolean = false,
+    submitting: Boolean = false,
+    importing: Boolean = false,
+    enabled: Boolean = true,
+    submissionEnabled: Boolean = true,
+    compactHeight: Boolean = false,
+    supportingText: String? = null,
+    notice: @Composable () -> Unit = {}
+) {
+    var addMenu by remember { mutableStateOf(false) }
+    val canEdit = enabled && !submitting
+    val canSubmit = canEdit && submissionEnabled && !importing && (text.isNotBlank() || attachments.isNotEmpty())
+
+    Surface(modifier = modifier, tonalElevation = 2.dp) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                notice()
+            if (attachments.isNotEmpty()) {
+                AttachmentStrip(
+                    attachments = attachments,
+                    onPreview = onPreviewAttachment,
+                    onRemove = onRemoveAttachment,
+                    enabled = canEdit && !importing,
+                    compact = compactHeight,
+                    modifier = Modifier.fillMaxWidth().testTag(ChatTags.ATTACHMENTS)
+                )
+            }
+            if (importing) {
+                Text(
+                    stringResource(R.string.attachment_importing),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                )
+            }
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                enabled = canEdit,
+                label = { Text(stringResource(R.string.composer_label)) },
+                placeholder = { Text(stringResource(R.string.chat_input_hint)) },
+                maxLines = if (compactHeight) 2 else 6,
+                shape = MaterialTheme.shapes.large,
+                textStyle = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.fillMaxWidth().testTag(ChatTags.INPUT)
+            )
+            supportingText?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Box {
+                    TextButton(
+                        onClick = { addMenu = true },
+                        enabled = canEdit && !importing,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.ADD)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Text(stringResource(R.string.composer_add), Modifier.padding(start = 8.dp))
+                    }
+                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.composer_add_file)) },
+                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
+                            onClick = { addMenu = false; onPickText() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.composer_add_image)) },
+                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                            onClick = { addMenu = false; onPickImages() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.composer_voice)) },
+                            leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                            onClick = { addMenu = false; onVoice() }
+                        )
+                    }
+                }
+                if (sending && !submitting) {
+                    FilledTonalButton(
+                        onClick = onStop,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.STOP)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null)
+                        Text(stringResource(R.string.composer_stop), Modifier.padding(start = 8.dp))
+                    }
+                } else {
+                    Button(
+                        onClick = onSend,
+                        enabled = canSubmit && !sending,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.SEND)
+                    ) {
+                        if (submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
+                        Text(
+                            stringResource(if (submitting) R.string.composer_submitting else R.string.chat_send),
+                            Modifier.padding(start = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
