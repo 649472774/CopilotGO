@@ -6,8 +6,4 @@
     <cache-path
         name="verified_updates"
         path="updates/" />
-    <!-- Keep the legacy root until the updater migrates to private cache. -->
-    <external-files-path
-        name="apk_updates"
-        path="update/" />
 </paths>

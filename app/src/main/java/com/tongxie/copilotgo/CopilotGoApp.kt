@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class CopilotGoApp : Application() {
@@ -50,8 +51,7 @@ class AppContainer(app: CopilotGoApp) {
         } else {
             HttpLoggingInterceptor.Level.NONE
         }
-        // Bug 11 修复：debug 构建用 HEADERS 级日志便于排查，但绝对不能把 Bearer token
-        // 打进 logcat — 任何 READ_LOGS 权限的进程或 device dump 都能拿到。
+        // Credentials must not be included in HTTP logs.
         redactHeader("Authorization")
         redactHeader("authorization")
         redactHeader("Cookie")
@@ -75,7 +75,9 @@ class AppContainer(app: CopilotGoApp) {
                 .addInterceptor(logger)
         },
         proxyConfigFlow = proxySettings.config,
-        scope = providerScope
+        scope = providerScope,
+        readiness = proxySettings.initialized,
+        configurationError = proxySettings.loadError
     )
 
     val tokenStore = TokenStore(app)
@@ -87,7 +89,13 @@ class AppContainer(app: CopilotGoApp) {
 
     val healthChecker = ProxyHealthChecker(httpProvider, authRepo)
 
-    val chatClient = CopilotChatClient(httpProvider, json, authRepo)
+    val chatClient = CopilotChatClient(
+        httpProvider,
+        json,
+        authRepo,
+        modelCacheFile = File(app.filesDir, "model-catalog.json")
+    )
+    val modelCatalog = chatClient.modelCatalog
 
     val paths = AppPaths(app)
     val sessionStore = SessionStore(paths, json)
@@ -98,9 +106,10 @@ class AppContainer(app: CopilotGoApp) {
     val updateChecker = UpdateChecker(
         httpProvider = httpProvider,
         json = json,
-        currentVersionName = BuildConfig.VERSION_NAME
+        currentVersionName = BuildConfig.VERSION_NAME,
+        debugPackage = BuildConfig.DEBUG
     )
 
-    /** Application 级单例：跨 ChatViewModel 生命周期持有 SSE 流任务。详见类注释 & AGENTS.md §27。 */
+    /** Application-owned streaming; the session store remains the live state authority. */
     val chatStreamCenter = ChatStreamCenter(sessionStore, chatClient)
 }
