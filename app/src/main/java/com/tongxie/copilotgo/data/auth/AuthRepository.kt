@@ -4,6 +4,7 @@ import com.tongxie.copilotgo.data.Constants
 import com.tongxie.copilotgo.data.net.ApiException
 import com.tongxie.copilotgo.data.net.networkErrorMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
@@ -39,6 +40,7 @@ class AuthRepository(
     private val _accountGeneration = MutableStateFlow(0L)
     val accountGeneration = _accountGeneration.asStateFlow()
     private var activeDeviceCode: Pair<String, Long>? = null
+    private var logoutFlight: CompletableDeferred<Unit>? = null
 
     data class CopilotSession(val token: String, val apiBase: String)
 
@@ -84,7 +86,7 @@ class AuthRepository(
             _accountGeneration.value
         }
         try {
-            val code = deviceFlow.requestDeviceCode()
+            val code = withAccount { deviceFlow.requestDeviceCode() }
             currentCoroutineContext().ensureActive()
             synchronized(guard) {
                 requireCurrent(generation)
@@ -109,7 +111,7 @@ class AuthRepository(
                 ?: throw CancellationException("Login is no longer active")
         }
         try {
-            deviceFlow.pollAccessToken(dc).collect { result ->
+            withAccount { deviceFlow.pollAccessToken(dc).collect { result ->
                 requireCurrent(generation)
                 when (result) {
                     is DeviceFlowClient.PollResult.Success -> {
@@ -125,7 +127,7 @@ class AuthRepository(
                     }
                     is DeviceFlowClient.PollResult.Failure -> failLogin(generation, result.message)
                 }
-            }
+            } }
         } catch (e: CancellationException) {
             finishCancelledLogin(generation)
             throw e
@@ -159,9 +161,9 @@ class AuthRepository(
         }
     }
 
-    suspend fun getValidCopilotSession(): CopilotSession {
+    suspend fun getValidCopilotSession(): CopilotSession = withAccount {
         val generation = accountGeneration.value
-        return refreshLock.withLock {
+        refreshLock.withLock {
             val credentials = credentialsLock.withLock {
                 requireCurrent(generation)
                 if (_loggingOut.value) throw ApiException(401, message = "正在退出登录")
@@ -240,23 +242,38 @@ class AuthRepository(
     }
 
     suspend fun logout() {
-        synchronized(guard) {
+        val (completion, owner) = synchronized(guard) {
+            logoutFlight?.let { return@synchronized it to false }
+            val completion = CompletableDeferred<Unit>()
+            logoutFlight = completion
             _accountGeneration.value += 1
             activeDeviceCode = null
             _busy.value = false
             _loggingOut.value = true
+            completion to true
         }
-        try {
-            // Clearing credentials must finish even when navigation cancels its caller.
-            withContext(NonCancellable) {
+        if (!owner) {
+            completion.await()
+            return
+        }
+        // Duplicate logout actions join one durable clear; navigation cannot cancel the clear.
+        withContext(NonCancellable) {
+            try {
                 credentialsLock.withLock { tokenStore.clearAll() }
                 synchronized(guard) { _state.value = AuthState.NotLoggedIn }
+                completion.complete(Unit)
+            } catch (e: Exception) {
+                _state.value = AuthState.Failed("退出登录未完成，凭据清除失败，请重试")
+                completion.completeExceptionally(e)
+                throw e
+            } finally {
+                synchronized(guard) {
+                    if (logoutFlight === completion) {
+                        logoutFlight = null
+                        _loggingOut.value = false
+                    }
+                }
             }
-        } catch (e: Exception) {
-            _state.value = AuthState.Failed("退出登录未完成，凭据清除失败，请重试")
-            throw e
-        } finally {
-            _loggingOut.value = false
         }
     }
 

@@ -35,8 +35,8 @@ class PromptBuilderTest {
                 listOf(UiMessage("current", "user", "界".repeat(100))), smallModel
             )
             fail("The latest turn must not be cut")
-        } catch (_: ModelUnavailableException) {
-            assertTrue(true)
+        } catch (expected: ModelUnavailableException) {
+            assertTrue(expected.message!!.contains("上下文"))
         }
     }
 

@@ -21,7 +21,7 @@ class PromptBuilder(private val attachments: AttachmentStore) {
             for (message in messages) {
                 when (message.role) {
                     "user" -> turns.add(mutableListOf(message))
-                    "assistant" -> turns.lastOrNull()?.add(message)
+                    "assistant" -> if (message.finishReason != "orphaned") turns.lastOrNull()?.add(message)
                 }
             }
             if (turns.isEmpty()) throw ModelUnavailableException("没有可发送的用户消息")

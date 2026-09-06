@@ -16,7 +16,9 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import okio.Path.Companion.toPath
 
+// Keep real JVM persistence without the default FileStorage's Windows rename regression.
 class TokenMigrationTest {
     @get:Rule val temporary = TemporaryFolder()
 
@@ -24,8 +26,8 @@ class TokenMigrationTest {
     fun legacyCredentialsAreClearedOnlyAfterVerifiedEncryptedWrite() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val dataStore = PreferenceDataStoreFactory.create(scope = scope) {
-                File(temporary.root, "success.preferences_pb")
+            val dataStore = PreferenceDataStoreFactory.createWithPath(scope = scope) {
+                File(temporary.root, "success.preferences_pb").absolutePath.toPath()
             }
             dataStore.edit { it[stringPreferencesKey("gh_token")] = "fixture-legacy" }
             val vault = MemoryVault()
@@ -45,8 +47,8 @@ class TokenMigrationTest {
     fun migrationFailurePreservesLegacyCredentials() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val dataStore = PreferenceDataStoreFactory.create(scope = scope) {
-                File(temporary.root, "failure.preferences_pb")
+            val dataStore = PreferenceDataStoreFactory.createWithPath(scope = scope) {
+                File(temporary.root, "failure.preferences_pb").absolutePath.toPath()
             }
             val key = stringPreferencesKey("gh_token")
             dataStore.edit { it[key] = "fixture-legacy" }
@@ -66,8 +68,8 @@ class TokenMigrationTest {
     fun missingEncryptedKeyDoesNotFallBackToPlaintext() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val dataStore = PreferenceDataStoreFactory.create(scope = scope) {
-                File(temporary.root, "corrupt.preferences_pb")
+            val dataStore = PreferenceDataStoreFactory.createWithPath(scope = scope) {
+                File(temporary.root, "corrupt.preferences_pb").absolutePath.toPath()
             }
             dataStore.edit { it[stringPreferencesKey("gh_token")] = "fixture-legacy" }
             val broken = object : SecretVault {
