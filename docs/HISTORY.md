@@ -1,6 +1,33 @@
 # 开发历史
 
-本项目由 GitHub Copilot CLI（Claude Opus 4.7）协助开发，下面是按检查点整理的开发历程摘要。
+本文件保留早期检查点记录。**下面历史快照中的路径、模型清单、版本、未完成事项和
+操作步骤不是现行指令**，尤其不能复用旧的固定模拟器 serial、JDK 绝对路径、
+`git add -A` 或签名/备份假设。现行规范见 [AGENTS.md](../AGENTS.md) 与
+[发布与维护指南](RELEASING.md)，实际依赖与版本以 Gradle 配置为准。
+
+## 2026-09-07 — 发布基础设施加固（未单独发版）
+
+- 回滚基线是 `v0.1.33` / `216ac26` / versionCode 34；实现检查点保留基线版本号，
+  里程碑升版与发布交由集成负责人统一执行。
+- 技术栈实际为 Kotlin 2.x、kotlinx.serialization、Preferences DataStore 与 JSON，
+  不是早期说明中的 Kotlin 1.9 / Moshi / SharedPreferences 会话数据库。
+- AGP 9.0.1、Gradle 9.1.0、内置 Kotlin 与编译插件 2.2.10 对齐，Compose 使用
+  2025.10.01 BOM；minSdk 31 保持，targetSdk 提升到 36，恢复严格 lint。
+- 修正 DataStore 备份路径为 `files/datastore/`，同时覆盖云备份与设备迁移；
+  排除旧偏好凭据与 WebView 登录数据，新凭据使用 no-backup 存储策略。
+- 更新器改为完整 body IO、贯穿响应生命周期的取消、有界网络与文件读取、
+  显式直连选择、原子临时文件、SHA-256 与真实 APK 安装兼容性校验。
+- 更新检查/下载可取消并可重试；下载、安装权限与系统安装器返回是不同状态，
+  不把启动安装器宣称为安装成功。
+- 本机基线与发布 APK 的公开证书指纹相同，记录在 `scripts/release-signing.json`；
+  CI 临时签名包明确标记为验证产物，不再暗示可覆盖用户现有安装。
+- 发布脚本默认不升版/装机/复制/提交/推送；显式操作检查 native 退出码，
+  保留源码 SHA、回滚标签、原 APK、校验和及发布说明。
+
+这条记录说明代码与交付协议变更，**不代表**已完成实际设备验收、已升级用户账户
+或已发布新的稳定版本。最终验收结果随集成发布记录保存。
+
+## 早期快照（只供追溯）
 
 ---
 
@@ -923,4 +950,5 @@ versionCode 11 → 12，versionName 0.1.10 → 0.1.11。
 - Bug 14：sessionFlows 等 map 无限增长
 - Bug 15：SSE event:error 行解析
 
-详细修复说明见 AGENTS.md §28。
+对应时期的规范可通过 `git log -- AGENTS.md` 查阅；这些历史判断不应替代当前代码、
+测试与实际缺陷复现。

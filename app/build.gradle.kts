@@ -19,6 +19,19 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    val signingStore = providers.environmentVariable("COPILOTGO_SIGNING_STORE_FILE").orNull
+    if (signingStore != null) {
+        signingConfigs.getByName("debug") {
+            storeFile = file(signingStore).also { require(it.isFile) { "Configured signing store does not exist" } }
+            storePassword = providers.environmentVariable("COPILOTGO_SIGNING_STORE_PASSWORD").orNull
+                ?: error("COPILOTGO_SIGNING_STORE_PASSWORD is required with a custom signing store")
+            keyAlias = providers.environmentVariable("COPILOTGO_SIGNING_KEY_ALIAS").orNull
+                ?: error("COPILOTGO_SIGNING_KEY_ALIAS is required with a custom signing store")
+            keyPassword = providers.environmentVariable("COPILOTGO_SIGNING_KEY_PASSWORD").orNull
+                ?: error("COPILOTGO_SIGNING_KEY_PASSWORD is required with a custom signing store")
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false

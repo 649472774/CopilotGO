@@ -1,0 +1,8 @@
+{
+  "applicationId": "com.tongxie.copilotgo.debug",
+  "certificateSha256": "89dbef99c2c81eb48b0bf28dd698631ffcdf8ad7cbb4dac9960914096e68928b",
+  "rollbackTag": "v0.1.33",
+  "rollbackCommit": "216ac26f3e8e92a4ab9e5870d64d43fbe8480b48",
+  "rollbackApkSha256": "f9acee141f956818fdeae64f6082c9b3a2f506f3c4e8b61da57ba7237b93e4d5",
+  "verification": "Published v0.1.33 APK and local baseline share this public certificate. An installed device was not inspected."
+}
