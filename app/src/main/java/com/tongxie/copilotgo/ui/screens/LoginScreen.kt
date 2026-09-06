@@ -1,157 +1,301 @@
 package com.tongxie.copilotgo.ui.screens
 
 import android.content.ClipData
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tongxie.copilotgo.R
 import com.tongxie.copilotgo.data.auth.AuthState
+import com.tongxie.copilotgo.ui.components.FeedbackBanner
+import com.tongxie.copilotgo.ui.components.PageScaffold
+import com.tongxie.copilotgo.ui.components.ScreenState
+import com.tongxie.copilotgo.ui.settings.GITHUB_DEVICE_AUTHORIZATION_URL
+import com.tongxie.copilotgo.ui.settings.SettingsSection
+import com.tongxie.copilotgo.ui.settings.trustedGitHubAuthorizationUrl
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
+import com.tongxie.copilotgo.util.Logger
+import kotlinx.coroutines.launch
 
 @Composable
 fun LoginScreen(
     viewModel: AuthViewModel,
-    onLoggedIn: () -> Unit
+    onLoggedIn: () -> Unit,
+    onBack: (() -> Unit)? = null
 ) {
-    val state by viewModel.state.collectAsState()
-    val deviceCode by viewModel.deviceCode.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val initializing by viewModel.initializing.collectAsStateWithLifecycle()
+    val loggingOut by viewModel.loggingOut.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val currentOnLoggedIn by rememberUpdatedState(onLoggedIn)
+    val dispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    val activeLogin = !initializing && !loggingOut && (busy || state is AuthState.AwaitingUserAuthorization)
 
-    LaunchedEffect(state) {
-        if (state is AuthState.LoggedIn) onLoggedIn()
+    fun leave() {
+        if (activeLogin) {
+            viewModel.cancel()
+            onBack?.invoke()
+        } else {
+            onBack?.invoke() ?: dispatcher?.onBackPressed()
+        }
     }
 
-    Scaffold { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "CopilotGo",
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "用你的 GitHub Copilot 订阅，移动端聊代码",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-            )
-            Spacer(Modifier.height(48.dp))
+    // Without an explicit navigation callback, the first Back cancels; the next is normal system Back.
+    BackHandler(enabled = activeLogin) {
+        viewModel.cancel()
+        onBack?.invoke()
+    }
 
-            when (val s = state) {
-                AuthState.NotLoggedIn -> {
-                    Button(
-                        onClick = { viewModel.startLogin() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("开始登录 GitHub")
-                    }
-                    Spacer(Modifier.height(16.dp))
+    LaunchedEffect(state, initializing, loggingOut) {
+        if (!initializing && !loggingOut && state is AuthState.LoggedIn) currentOnLoggedIn()
+    }
+
+    fun startLogin() {
+        if (!viewModel.busy.value && !viewModel.initializing.value && !viewModel.loggingOut.value) {
+            viewModel.startLogin()
+        }
+    }
+
+    PageScaffold(stringResource(R.string.settings_login_title), ::leave, snackbar) { pageModifier ->
+        if (initializing || loggingOut) {
+            ScreenState(
+                title = stringResource(
+                    if (loggingOut) R.string.settings_account_logging_out
+                    else R.string.settings_login_initializing
+                ),
+                detail = stringResource(
+                    if (loggingOut) R.string.settings_account_logout_progress
+                    else R.string.settings_login_initializing_detail
+                ),
+                loading = true,
+                modifier = pageModifier
+            )
+        } else {
+            Column(
+                pageModifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "⚠ 本应用通过非官方方式访问 Copilot API，可能违反 GitHub 服务条款。\n仅供个人学习/自用，使用风险自负。",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error
+                        stringResource(R.string.settings_app_name),
+                        style = MaterialTheme.typography.headlineLarge,
+                        modifier = Modifier.semantics { heading() }
+                    )
+                    Text(
+                        stringResource(R.string.settings_login_intro),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                is AuthState.AwaitingUserAuthorization -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(24.dp)
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("验证码", style = MaterialTheme.typography.labelMedium)
-                            Spacer(Modifier.height(8.dp))
+                when (val current = state) {
+                    is AuthState.AwaitingUserAuthorization -> {
+                        val authorizationUrl = remember(current.verificationUri) {
+                            trustedGitHubAuthorizationUrl(current.verificationUri)
+                        }
+                        SettingsSection(stringResource(R.string.settings_login_code)) {
+                            SelectionContainer {
+                                Text(
+                                    current.userCode,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    style = MaterialTheme.typography.headlineMedium.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        textDirection = TextDirection.Ltr
+                                    )
+                                )
+                            }
+                            Text(stringResource(R.string.settings_login_code_hint), style = MaterialTheme.typography.bodyLarge)
+                            SelectionContainer {
+                                Text(
+                                    authorizationUrl ?: GITHUB_DEVICE_AUTHORIZATION_URL,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    style = MaterialTheme.typography.bodyLarge.copy(textDirection = TextDirection.Ltr),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (authorizationUrl == null) {
+                                FeedbackBanner(stringResource(R.string.settings_login_invalid_url))
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val copied = copyLoginText(
+                                        context, context.getString(R.string.settings_login_code_label), current.userCode
+                                    )
+                                    scope.launch {
+                                        snackbar.showSnackbar(context.getString(
+                                            if (copied) R.string.settings_login_copied else R.string.settings_login_copy_failed
+                                        ))
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
+                            ) { Text(stringResource(R.string.settings_login_copy_code)) }
+                            Button(
+                                onClick = {
+                                    val trusted = trustedGitHubAuthorizationUrl(current.verificationUri) ?: return@Button
+                                    val opened = try {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(trusted))
+                                                .addCategory(Intent.CATEGORY_BROWSABLE)
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                        true
+                                    } catch (_: ActivityNotFoundException) {
+                                        Logger.w("No authorization browser is available")
+                                        false
+                                    } catch (_: SecurityException) {
+                                        Logger.w("Authorization browser launch was denied")
+                                        false
+                                    }
+                                    if (!opened) {
+                                        scope.launch {
+                                            val result = snackbar.showSnackbar(
+                                                context.getString(R.string.settings_login_no_browser),
+                                                actionLabel = context.getString(R.string.settings_login_copy_url),
+                                                withDismissAction = true
+                                            )
+                                            if (result == SnackbarResult.ActionPerformed) {
+                                                val copied = copyLoginText(
+                                                    context, context.getString(R.string.settings_login_url_label), trusted
+                                                )
+                                                snackbar.showSnackbar(context.getString(
+                                                    if (copied) R.string.settings_login_url_copied else R.string.settings_login_copy_failed
+                                                ))
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = authorizationUrl != null,
+                                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
+                            ) { Text(stringResource(R.string.settings_login_open_browser)) }
+                        }
+                        LoginProgress(stringResource(R.string.settings_login_waiting))
+                        Text(
+                            stringResource(R.string.settings_login_expiry_hint),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(
+                            onClick = viewModel::cancel,
+                            modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
+                        ) { Text(stringResource(R.string.settings_login_cancel)) }
+                    }
+                    is AuthState.LoggedIn -> {
+                        Text(
+                            stringResource(R.string.settings_login_success),
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        )
+                    }
+                    else -> {
+                        if (busy) {
+                            LoginProgress(stringResource(R.string.settings_login_requesting))
                             Text(
-                                s.userCode,
-                                fontSize = 32.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
+                                stringResource(R.string.settings_login_requesting_detail),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "在浏览器中打开 ${s.verificationUri}\n粘贴上面这串验证码完成授权",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
+                            OutlinedButton(
+                                onClick = viewModel::cancel,
+                                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
+                            ) { Text(stringResource(R.string.settings_login_cancel)) }
+                        } else {
+                            if (current is AuthState.Failed) {
+                                SettingsSection(stringResource(R.string.settings_login_failed_title)) {
+                                    FeedbackBanner(stringResource(loginFailureText(current.message)), isError = true)
+                                }
+                            }
+                            Button(
+                                onClick = ::startLogin,
+                                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
+                            ) {
+                                Text(stringResource(
+                                    if (current is AuthState.Failed) R.string.settings_action_retry
+                                    else R.string.settings_login_start
+                                ))
+                            }
                         }
                     }
-                    Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick = {
-                            copyAndOpen(context, s.userCode, s.verificationUri)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("复制验证码并打开浏览器")
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.cancel() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("取消") }
-                    Spacer(Modifier.height(16.dp))
-                    CircularProgressIndicator(strokeWidth = 2.dp)
-                    Spacer(Modifier.height(8.dp))
-                    Text("等待你在浏览器中授权…", style = MaterialTheme.typography.bodyMedium)
                 }
-                is AuthState.LoggedIn -> {
-                    Text("登录成功", style = MaterialTheme.typography.titleMedium)
-                }
-                is AuthState.Failed -> {
+                SettingsSection(stringResource(R.string.settings_terms_title)) {
                     Text(
-                        "登录失败：${s.message}",
-                        color = MaterialTheme.colorScheme.error
+                        stringResource(R.string.settings_login_terms),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { viewModel.startLogin() }) { Text("重试") }
                 }
             }
         }
     }
 }
 
-private fun copyAndOpen(ctx: Context, code: String, url: String) {
-    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("user_code", code))
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+@Composable
+private fun LoginProgress(text: String) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+    ) {
+        CircularProgressIndicator(Modifier.size(28.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge)
     }
-    ctx.startActivity(intent)
+}
+
+private fun copyLoginText(context: Context, label: String, value: String): Boolean = try {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    if (clipboard == null) false else {
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
+        true
+    }
+} catch (_: SecurityException) {
+    Logger.w("Authorization clipboard access denied")
+    false
+} catch (_: IllegalStateException) {
+    Logger.w("Authorization clipboard is unavailable")
+    false
+}
+
+private fun loginFailureText(message: String): Int = when {
+    message.contains("过期") || message.contains("expired", ignoreCase = true) -> R.string.settings_login_expired
+    message.contains("拒绝") || message.contains("denied", ignoreCase = true) -> R.string.settings_login_denied
+    message.contains("频率") || message.contains("rate", ignoreCase = true) -> R.string.settings_login_rate_limited
+    message.contains("读取") && message.contains("凭据") -> R.string.settings_login_credential_error
+    else -> R.string.settings_login_failed_detail
 }
