@@ -1,9 +1,9 @@
 package com.tongxie.copilotgo.data.auth
 
-import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.tongxie.copilotgo.data.storage.SecretVault
+import com.tongxie.copilotgo.data.storage.preferenceDataStoreFixture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,7 +16,6 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
-import okio.Path.Companion.toPath
 
 // Keep real JVM persistence without the default FileStorage's Windows rename regression.
 class TokenMigrationTest {
@@ -26,9 +25,7 @@ class TokenMigrationTest {
     fun legacyCredentialsAreClearedOnlyAfterVerifiedEncryptedWrite() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val dataStore = PreferenceDataStoreFactory.createWithPath(scope = scope) {
-                File(temporary.root, "success.preferences_pb").absolutePath.toPath()
-            }
+            val dataStore = preferenceDataStoreFixture(File(temporary.root, "success.preferences_pb"), scope)
             dataStore.edit { it[stringPreferencesKey("gh_token")] = "fixture-legacy" }
             val vault = MemoryVault()
             val store = TokenStore(dataStore, vault)
@@ -47,9 +44,7 @@ class TokenMigrationTest {
     fun migrationFailurePreservesLegacyCredentials() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val dataStore = PreferenceDataStoreFactory.createWithPath(scope = scope) {
-                File(temporary.root, "failure.preferences_pb").absolutePath.toPath()
-            }
+            val dataStore = preferenceDataStoreFixture(File(temporary.root, "failure.preferences_pb"), scope)
             val key = stringPreferencesKey("gh_token")
             dataStore.edit { it[key] = "fixture-legacy" }
             val vault = MemoryVault().apply { fail = true }
@@ -68,9 +63,7 @@ class TokenMigrationTest {
     fun missingEncryptedKeyDoesNotFallBackToPlaintext() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val dataStore = PreferenceDataStoreFactory.createWithPath(scope = scope) {
-                File(temporary.root, "corrupt.preferences_pb").absolutePath.toPath()
-            }
+            val dataStore = preferenceDataStoreFixture(File(temporary.root, "corrupt.preferences_pb"), scope)
             dataStore.edit { it[stringPreferencesKey("gh_token")] = "fixture-legacy" }
             val broken = object : SecretVault {
                 override suspend fun read(name: String): String? = throw IOException("fixture key unavailable")
