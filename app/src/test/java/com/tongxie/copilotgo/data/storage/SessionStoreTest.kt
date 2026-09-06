@@ -89,13 +89,13 @@ class SessionStoreTest {
             reopened.load()
             assertEquals("backup title", reopened.getSession("session")!!.title)
             assertTrue(reopened.issues.value.any { it.recovered })
-            assertTrue(file("session.json").parentFile.listFiles()!!.any { it.name.startsWith("session.json.corrupt-") })
+            assertTrue(file("session.json").parentFile!!.listFiles()!!.any { it.name.startsWith("session.json.corrupt-") })
         } finally { reopened.close() }
     }
 
     @Test
     fun unrecoverableConversationRemainsVisibleInsteadOfDisappearing() = runBlocking {
-        file("session.json").parentFile.mkdirs()
+        file("session.json").parentFile!!.mkdirs()
         file("session.json").writeText("{broken")
         val store = store()
         try {
@@ -169,7 +169,7 @@ class SessionStoreTest {
     @Test
     fun legacyImageBytesMoveOutOfJsonAndInterruptedMessagesAreRepaired() = runBlocking {
         val image = CoreFixture.imageDataUri()
-        file("legacy.json").parentFile.mkdirs()
+        file("legacy.json").parentFile!!.mkdirs()
         file("legacy.json").writeText(
             """{"id":"legacy","title":"历史 CJK 😀","model":"retired-fixture","pinned":true,"messages":[{"id":"u","role":"user","content":"图片","imageUrls":["$image"]},{"id":"a","role":"assistant","content":"","isStreaming":true}]}"""
         )

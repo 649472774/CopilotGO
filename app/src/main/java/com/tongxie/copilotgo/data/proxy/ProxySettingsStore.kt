@@ -64,7 +64,10 @@ class ProxySettingsStore(
                         ProxyConfig(
                             prefs[KEY_ENABLED] ?: false, type, prefs[KEY_HOST] ?: "127.0.0.1",
                             prefs[KEY_PORT] ?: 7890, prefs[KEY_USERNAME] ?: "", prefs[KEY_PASSWORD] ?: ""
-                        ).also { persist(it) }
+                        ).also {
+                            require(!it.enabled || it.isValid()) { "已保存的代理配置无效" }
+                            persist(it)
+                        }
                     }
                     require(!saved.enabled || saved.isValid()) { "已保存的代理配置无效" }
                     clearLegacy()

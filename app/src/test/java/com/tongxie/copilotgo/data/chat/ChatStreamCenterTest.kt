@@ -2,6 +2,10 @@ package com.tongxie.copilotgo.data.chat
 
 import com.tongxie.copilotgo.data.storage.SessionStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -13,6 +17,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.CoroutineContext
 
 class ChatStreamCenterTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -187,6 +192,113 @@ class ChatStreamCenterTest {
             val session = fixture.store.getSession("fixture-session")!!
             assertEquals("retired-fixture", session.model)
             assertTrue(session.messages.isEmpty())
+        }
+    }
+
+    @Test
+    fun reusedSubmissionIdWithChangedContentIsRejected() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            fixture.create()
+            fixture.enqueueText()
+            assertTrue(fixture.center.submit("fixture-session", "first", submissionId = "same") is SendResult.Accepted)
+            fixture.idle()
+            assertTrue(fixture.center.submit("fixture-session", "changed", submissionId = "same") is SendResult.Rejected)
+            fixture.idle()
+            assertEquals(1, fixture.requests.count { it.path == "/chat/completions" })
+            assertEquals("first", fixture.store.getSession("fixture-session")!!.messages.first().content)
+        }
+    }
+
+    @Test
+    fun activeStreamCannotBeEditedDeletedOrRegenerated() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            fixture.create()
+            fixture.replies.add(CoreFixture.sse("data: [DONE]\n\n").setBodyDelay(1, TimeUnit.SECONDS))
+            assertTrue(fixture.center.submit("fixture-session", "question") is SendResult.Accepted)
+            val snapshot = fixture.store.getSession("fixture-session")!!
+            assertTrue(fixture.center.deleteMessageAndAwait(snapshot.id, snapshot.messages.first().id) is OperationResult.Rejected)
+            assertTrue(fixture.center.editAndResendAndAwait(snapshot.id, snapshot.messages.first().id, "edit") is OperationResult.Rejected)
+            assertTrue(fixture.center.regenerateAndAwait(snapshot.id, snapshot.messages.last().id) is OperationResult.Rejected)
+            fixture.center.stop(snapshot.id)
+            fixture.idle()
+            assertEquals(2, fixture.store.getSession(snapshot.id)!!.messages.size)
+        }
+    }
+
+    @Test
+    fun delayedAccountObserverDoesNotCancelANewAccountSubmission() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            fixture.create()
+            val dispatcher = PausedDispatcher()
+            val center = ChatStreamCenter(
+                fixture.store, fixture.client, fixture.catalog, CoroutineScope(SupervisorJob() + dispatcher)
+            )
+            try {
+                val credentials = fixture.credentials.credentials
+                fixture.auth.logout()
+                fixture.credentials.credentials = credentials
+                fixture.models = { CoreFixture.modelResponse().setBodyDelay(100, TimeUnit.MILLISECONDS) }
+                fixture.enqueueText()
+                val submission = async(start = CoroutineStart.UNDISPATCHED) {
+                    center.submit("fixture-session", "new account request")
+                }
+                dispatcher.release()
+                assertTrue(withTimeout(3000) { submission.await() } is SendResult.Accepted)
+                withTimeout(3000) { center.sendingFlow("fixture-session").first { !it } }
+                assertEquals("fixture reply", fixture.store.getSession("fixture-session")!!.messages.last().content)
+            } finally { center.close() }
+        }
+    }
+
+    @Test
+    fun deletingOnlyAUserKeepsReplyVisibleButDoesNotSendItAsAnotherTurnsAnswer() = runBlocking {
+        CoreFixture(temporary.root).use { fixture ->
+            fixture.create()
+            fixture.store.update("fixture-session") {
+                it.copy(messages = mutableListOf(
+                    UiMessage("u1", "user", "first question"),
+                    UiMessage("a1", "assistant", "first answer"),
+                    UiMessage("u2", "user", "deleted question"),
+                    UiMessage("a2", "assistant", "orphaned answer")
+                ))
+            }
+            assertEquals(OperationResult.Accepted, fixture.center.deleteMessageAndAwait("fixture-session", "u2"))
+            fixture.idle()
+            val retained = fixture.store.getSession("fixture-session")!!
+            assertEquals(listOf("u1", "a1", "a2"), retained.messages.map { it.id })
+            assertEquals("orphaned answer", retained.messages.last().content)
+            val regenerate = fixture.center.regenerateAndAwait("fixture-session", "a2") as OperationResult.Rejected
+            assertTrue(regenerate.message.contains("用户消息已删除"))
+            fixture.idle()
+            fixture.enqueueText()
+            assertTrue(fixture.center.submit("fixture-session", "new question") is SendResult.Accepted)
+            fixture.idle()
+            val sent = fixture.json.decodeFromString(
+                ChatRequest.serializer(), fixture.requests.single { it.path == "/chat/completions" }.body.readUtf8()
+            )
+            assertEquals(listOf("first question", "first answer", "new question"), sent.messages.map { it.content })
+        }
+    }
+
+    private class PausedDispatcher : CoroutineDispatcher() {
+        private val guard = Any()
+        private var released = false
+        private val pending = mutableListOf<Pair<CoroutineContext, Runnable>>()
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            val dispatch = synchronized(guard) {
+                if (released) true else {
+                    pending.add(context to block)
+                    false
+                }
+            }
+            if (dispatch) Dispatchers.Default.dispatch(context, block)
+        }
+        fun release() {
+            val tasks = synchronized(guard) {
+                released = true
+                pending.toList().also { pending.clear() }
+            }
+            tasks.forEach { (context, block) -> Dispatchers.Default.dispatch(context, block) }
         }
     }
 }

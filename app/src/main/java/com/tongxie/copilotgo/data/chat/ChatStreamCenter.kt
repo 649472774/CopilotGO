@@ -50,7 +50,7 @@ class ChatStreamCenter(
         var owners = 0
     }
 
-    private class Ticket {
+    private class Ticket(val accountGeneration: Long) {
         var job: Job? = null
         var stopRequested = false
     }
@@ -76,7 +76,10 @@ class ChatStreamCenter(
                     accountGeneration = generation
                     synchronized(guard) {
                         slots.values.forEach { slot ->
-                            slot.ticket?.let { it.stopRequested = true; it.job?.cancel() }
+                            slot.ticket?.takeIf { it.accountGeneration != generation }?.let {
+                                it.stopRequested = true
+                                it.job?.cancel()
+                            }
                         }
                     }
                 }
@@ -141,7 +144,7 @@ class ChatStreamCenter(
         val slot = slot(id)
         if (slot.ticket != null) return@synchronized null
         store.retain(id)
-        val ticket = Ticket()
+        val ticket = Ticket(chatClient.accountGeneration.value)
         slot.ticket = ticket
         slot.sending.value = true
         slot.error.value = null
@@ -160,16 +163,19 @@ class ChatStreamCenter(
             var stopped = false
             try {
                 val original = store.getSession(id) ?: throw SessionDeletedException()
+                val history = prepareHistory(original, request)
+                val user = history.last()
                 if (request is Request.New && request.submissionId != null) {
                     original.messages.firstOrNull {
                         it.role == "user" && it.submissionId == request.submissionId
                     }?.let {
+                        if (it.content != user.content || it.imageUrls != user.imageUrls || it.attachments != user.attachments) {
+                            throw ModelUnavailableException("此草稿标识已用于不同内容，请修改草稿后重试")
+                        }
                         receipt.complete(SendResult.Accepted(it.id))
                         return@launch
                     }
                 }
-                val history = prepareHistory(original, request)
-                val user = history.last()
                 val needsVision = history.any { message ->
                     message.imageUrls.isNotEmpty() || message.attachments.any { it.kind == AttachmentKind.IMAGE }
                 }
@@ -179,7 +185,9 @@ class ChatStreamCenter(
                 val responseId = UUID.randomUUID().toString()
                 assistantId = responseId
                 withContext(NonCancellable) {
-                    if (synchronized(guard) { ticket.stopRequested }) throw CancellationException("Stopped")
+                    if (synchronized(guard) { ticket.stopRequested } ||
+                        ticket.accountGeneration != chatClient.accountGeneration.value
+                    ) throw CancellationException("Stopped or account changed")
                     store.update(id) { latest ->
                         if (latest.messages != original.messages || latest.model != original.model) {
                             throw com.tongxie.copilotgo.data.storage.SessionConflictException()
@@ -291,6 +299,9 @@ class ChatStreamCenter(
             is Request.Regenerate -> {
                 val assistantIndex = session.messages.indexOfFirst { it.id == request.assistantId && it.role == "assistant" }
                 if (assistantIndex < 0) throw ModelUnavailableException("要重新生成的回复已不存在")
+                if (session.messages[assistantIndex].finishReason == "orphaned") {
+                    throw ModelUnavailableException("此回复对应的用户消息已删除，无法重新生成")
+                }
                 val userIndex = (assistantIndex - 1 downTo 0).firstOrNull { session.messages[it].role == "user" }
                     ?: throw ModelUnavailableException("此回复没有对应的用户消息")
                 session.messages.take(userIndex + 1)
@@ -380,8 +391,18 @@ class ChatStreamCenter(
 
     suspend fun deleteMessageAndAwait(id: String, msgId: String): OperationResult = mutate(id) {
         store.update(id) { latest ->
-            if (latest.messages.none { it.id == msgId }) throw ModelUnavailableException("要删除的消息已不存在")
-            latest.copy(messages = latest.messages.filterNot { it.id == msgId }.toMutableList())
+            val index = latest.messages.indexOfFirst { it.id == msgId }
+            if (index < 0) throw ModelUnavailableException("要删除的消息已不存在")
+            val nextUser = (index + 1 until latest.messages.size).firstOrNull {
+                latest.messages[it].role == "user"
+            } ?: latest.messages.size
+            val orphaned = if (latest.messages[index].role == "user") {
+                latest.messages.subList(index + 1, nextUser).filter { it.role == "assistant" }.map { it.id }.toSet()
+            } else emptySet()
+            latest.copy(messages = latest.messages.filterNot { it.id == msgId }.map { message ->
+                // Keep the visible reply, but never attach it to an unrelated earlier question.
+                if (message.id in orphaned) message.copy(finishReason = "orphaned") else message
+            }.toMutableList())
         }
     }
 

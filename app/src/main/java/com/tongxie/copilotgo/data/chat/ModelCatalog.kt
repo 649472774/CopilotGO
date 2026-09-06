@@ -43,13 +43,14 @@ class ModelCatalog(
     val state = _state.asStateFlow()
     private var owner: String? = null
     private var observedGeneration = auth.accountGeneration.value
+    @Volatile private var stateGeneration = auth.accountGeneration.value
 
     init {
         scope.launch {
             auth.accountGeneration.collect { generation ->
                 if (generation != observedGeneration) {
                     observedGeneration = generation
-                    _state.value = ModelCatalogState()
+                    if (generation != stateGeneration) _state.value = ModelCatalogState()
                 }
             }
         }
@@ -58,8 +59,13 @@ class ModelCatalog(
     suspend fun refresh(force: Boolean = false) = withContext(Dispatchers.IO) {
         mutex.withLock {
             val generation = auth.accountGeneration.value
+            if (generation != stateGeneration) {
+                stateGeneration = generation
+                owner = null
+                _state.value = ModelCatalogState()
+            }
             val prior = state.value
-            if (!force && !prior.isStale && prior.error == null && prior.updatedAt != null &&
+            if (!force && !prior.isStale && prior.updatedAt != null &&
                 clock() - prior.updatedAt in 0 until REFRESH_INTERVAL_MS
             ) return@withLock
             _state.value = prior.copy(loading = true, error = null)
@@ -77,7 +83,7 @@ class ModelCatalog(
                 if (cacheFile != null) {
                     try {
                         AtomicFiles.write(cacheFile, json.encodeToString(
-                            CachedCatalog.serializer(), CachedCatalog(key, models, refreshed.updatedAt!!)
+                            CachedCatalog.serializer(), CachedCatalog(key, models, requireNotNull(refreshed.updatedAt))
                         ).toByteArray())
                     } catch (_: IOException) {
                         _state.value = refreshed.copy(error = "模型已获取，但本地缓存写入失败")
