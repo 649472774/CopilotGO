@@ -1,463 +1,450 @@
 package com.tongxie.copilotgo.data.chat
 
+import android.content.ContentResolver
+import android.net.Uri
 import com.tongxie.copilotgo.data.Constants
+import com.tongxie.copilotgo.data.net.networkErrorMessage
+import com.tongxie.copilotgo.data.storage.AttachmentImportException
+import com.tongxie.copilotgo.data.storage.AttachmentStore
+import com.tongxie.copilotgo.data.storage.SessionDeletedException
+import com.tongxie.copilotgo.data.storage.SessionStorageException
 import com.tongxie.copilotgo.data.storage.SessionStore
-import com.tongxie.copilotgo.util.Logger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * 单例：跨 ChatViewModel 生命周期持有正在进行的 SSE 流。
- *
- * 设计要点：
- * - scope = ApplicationScope (SupervisorJob + Main.immediate)
- *   -> ChatViewModel 销毁不再 cancel 流；用户退出 chat 屏幕，流继续在后台运行。
- * - 每个 sessionId 维护独立的 sessionFlow / sendingFlow / errorFlow。
- * - 流式过程中每 ~800ms 持久化一次到 SessionStore，避免进程被 kill 时全丢。
- * - load 时修正残留 isStreaming=true 的消息（上次进程被杀的痕迹），避免显示永久"..."。
- *
- * 进程被杀仍会丢——彻底解决需要 Foreground Service（后续可加）。
- *
- * ## 线程安全约定（v0.1.11 起严格执行）
- * - 所有 [Session.messages] 的 **写** 必须发生在 Main 线程（scope = Main.immediate 保证）。
- * - 持久化 [store.save] 必须先用 [snapshotForSave] 在 Main 上拷一份再扔给 IO，
- *   否则 IO 线程序列化时和 Main 写并发 → `ConcurrentModificationException` 或 JSON 截断。
- */
+/** Application-owned operations. SessionStore owns all conversation state and metadata. */
 class ChatStreamCenter(
     private val store: SessionStore,
-    private val chatClient: CopilotChatClient
+    private val chatClient: CopilotChatClient,
+    private val catalog: ModelCatalog = chatClient.modelCatalog,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    private val maxInactiveSessions: Int = 8
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val guard = Any()
+    private val slots = LinkedHashMap<String, Slot>(16, 0.75f, true)
+    private val promptBuilder = PromptBuilder(store.attachments)
+    private val deletionListener: (String) -> Unit = { stop(it) }
+    private var accountGeneration = chatClient.accountGeneration.value
 
-    private val sessionFlows = ConcurrentHashMap<String, MutableStateFlow<Session?>>()
-    private val sendingFlows = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
-    private val errorFlows = ConcurrentHashMap<String, MutableStateFlow<String?>>()
-    private val jobs = ConcurrentHashMap<String, Job>()
-    /** purge 之后还活着的 session id 集合检查；用于 send/save 拒绝复活已删除会话 */
-    private val purged = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
-
-    private val loaded = AtomicBoolean(false)
-    private val loadMutex = Mutex()
-
-    private suspend fun ensureLoaded() {
-        if (loaded.get()) return
-        loadMutex.withLock {
-            if (!loaded.get()) {
-                store.load()
-                loaded.set(true)
-            }
-        }
+    private class Slot {
+        val sending = MutableStateFlow(false)
+        val error = MutableStateFlow<String?>(null)
+        val notice = MutableStateFlow<String?>(null)
+        var ticket: Ticket? = null
+        var owners = 0
     }
 
-    /**
-     * Main-thread 安全的 session snapshot：深拷贝 messages 列表（UiMessage 本身 immutable）。
-     * IO 序列化用此快照，避免与 Main 上的 add/replace 并发。
-     */
-    private fun snapshotForSave(s: Session): Session =
-        s.copy(messages = ArrayList(s.messages))
-
-    /** 持久化（snapshot + IO 串行）。已 purge 的 session 拒绝写回。 */
-    private fun saveSnap(id: String, s: Session) {
-        if (purged.contains(id)) return
-        val snap = snapshotForSave(s)
-        scope.launch { runCatching { store.save(snap) } }
+    private class Ticket {
+        var job: Job? = null
+        var stopRequested = false
     }
 
-    fun sessionFlow(id: String): StateFlow<Session?> {
-        val mf = sessionFlows.getOrPut(id) {
-            val flow = MutableStateFlow<Session?>(null)
-            scope.launch {
-                ensureLoaded()
-                val s = store.sessions.value.firstOrNull { it.id == id }
-                if (s != null) {
-                    // 修正残留 isStreaming：流任务不在但 message 标记 streaming
-                    // -> 上次进程没活到流结束，把 "..." 修成静态内容。
-                    if (jobs[id] == null && s.messages.any { it.isStreaming }) {
-                        for (i in s.messages.indices) {
-                            if (s.messages[i].isStreaming) {
-                                val orig = s.messages[i]
-                                // content 空 → "[已中断]" 兜底（避免空气泡）
-                                val fixed = if (orig.content.isEmpty()) {
-                                    orig.copy(content = "[已中断]", isStreaming = false)
-                                } else {
-                                    orig.copy(isStreaming = false)
-                                }
-                                s.messages[i] = fixed
-                            }
+    private sealed interface Request {
+        data class New(
+            val text: String,
+            val attachments: List<String>,
+            val imageUrls: List<String>,
+            val refs: List<AttachmentRef>,
+            val submissionId: String?
+        ) : Request
+        data class Regenerate(val assistantId: String) : Request
+        data class Edit(val userId: String, val text: String) : Request
+        data object Retry : Request
+    }
+
+    init {
+        store.addDeletionListener(deletionListener)
+        scope.launch {
+            chatClient.accountGeneration.collect { generation ->
+                if (generation != accountGeneration) {
+                    accountGeneration = generation
+                    synchronized(guard) {
+                        slots.values.forEach { slot ->
+                            slot.ticket?.let { it.stopRequested = true; it.job?.cancel() }
                         }
-                        saveSnap(id, s)
                     }
                 }
-                flow.value = s
             }
-            flow
         }
-        return mf.asStateFlow()
     }
 
-    fun sendingFlow(id: String): StateFlow<Boolean> =
-        sendingFlows.getOrPut(id) { MutableStateFlow(false) }.asStateFlow()
+    private fun slot(id: String): Slot = synchronized(guard) { slots.getOrPut(id) { Slot() } }
+    fun sessionFlow(id: String): StateFlow<Session?> = store.sessionFlow(id)
+    fun loadState(id: String): StateFlow<SessionLoadState> = store.loadState(id)
+    fun sendingFlow(id: String): StateFlow<Boolean> = slot(id).sending.asStateFlow()
+    fun errorFlow(id: String): StateFlow<String?> = slot(id).error.asStateFlow()
+    fun noticeFlow(id: String): StateFlow<String?> = slot(id).notice.asStateFlow()
+    fun clearError(id: String) { slot(id).error.value = null }
 
-    fun errorFlow(id: String): StateFlow<String?> =
-        errorFlows.getOrPut(id) { MutableStateFlow(null) }.asStateFlow()
-
-    fun clearError(id: String) {
-        errorFlows[id]?.value = null
+    fun retain(id: String) {
+        store.retain(id)
+        synchronized(guard) { slot(id).owners++ }
     }
 
-    fun setModel(id: String, model: String) {
-        val s = sessionFlows[id]?.value ?: return
-        s.model = model
-        bump(id)
-        saveSnap(id, s)
+    fun release(id: String) {
+        store.release(id)
+        synchronized(guard) {
+            slots[id]?.let { it.owners = (it.owners - 1).coerceAtLeast(0) }
+            trimSlots()
+        }
     }
 
-    /**
-     * 会话被删除时调用：取消活跃流任务、清空 in-memory 缓存、阻止后续 saveSnap 复活磁盘文件。
-     * 必须由 [com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel.delete] 在 `store.delete` 之前调用。
-     */
-    fun purge(id: String) {
-        purged.add(id)
-        jobs.remove(id)?.cancel()
-        sessionFlows.remove(id)
-        sendingFlows.remove(id)
-        errorFlows.remove(id)
+    fun reload(id: String) {
+        scope.launch {
+            try {
+                store.getSession(id, reload = true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                slot(id).error.value = friendlyError(e)
+            }
+        }
     }
 
-    /** 强制让 StateFlow 重新派发（绕过 data class equals 去重） */
-    private fun bump(id: String) {
-        sessionFlows[id]?.update { it?.copy(revision = it.revision + 1) }
-    }
+    suspend fun importAttachment(resolver: ContentResolver, uri: Uri): AttachmentRef =
+        store.attachments.importAttachment(resolver, uri)
 
-    private fun replaceAssistant(s: Session, mid: String, transform: (UiMessage) -> UiMessage) {
-        val idx = s.messages.indexOfFirst { it.id == mid }
-        if (idx >= 0) s.messages[idx] = transform(s.messages[idx])
-    }
+    fun attachmentFile(ref: AttachmentRef): File = store.attachments.attachmentFile(ref)
 
-    fun send(
+    suspend fun submit(
         id: String,
         text: String,
         attachments: List<String> = emptyList(),
-        imageUrls: List<String> = emptyList()
-    ) {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty() && imageUrls.isEmpty()) return
-        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
-        if (sendingFlow.value) return
-        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
+        imageUrls: List<String> = emptyList(),
+        attachmentRefs: List<AttachmentRef> = emptyList(),
+        submissionId: String? = null
+    ): SendResult = launchRequest(id, Request.New(
+        text, attachments.toList(), imageUrls.toList(), attachmentRefs.toList(), submissionId
+    ))
 
-        // 异步主入口：先保证 session 已加载（Bug 8），再在 Main 上拼装+启动流
-        scope.launch {
-            val s = sessionFlows[id]?.value ?: run {
-                ensureLoaded()
-                val loaded = store.sessions.value.firstOrNull { it.id == id }
-                if (loaded == null) {
-                    errorFlow.value = "会话不存在或已被删除"
-                    return@launch
-                }
-                // 将刚加载的 session 灌进 flow（兼容 sessionFlow() 尚未触发 getOrPut 的边界）
-                sessionFlows.getOrPut(id) { MutableStateFlow<Session?>(null) }.value = loaded
-                loaded
-            }
-
-            startStreaming(id, s, trimmed, attachments, imageUrls, sendingFlow, errorFlow)
-        }
+    fun send(id: String, text: String, attachments: List<String> = emptyList(), imageUrls: List<String> = emptyList()) {
+        scope.launch { submit(id, text, attachments, imageUrls) }
     }
 
-    /** 在 Main.immediate 上调用：构造消息 + 启动 SSE job。 */
-    private fun startStreaming(
-        id: String,
-        s: Session,
-        trimmed: String,
-        attachments: List<String>,
-        imageUrls: List<String>,
-        sendingFlow: MutableStateFlow<Boolean>,
-        errorFlow: MutableStateFlow<String?>
-    ) {
-        val finalPrompt = if (attachments.isEmpty()) {
-            trimmed.ifEmpty { "请看图。" }
-        } else {
-            buildString {
-                attachments.forEach { content ->
-                    appendLine("```"); appendLine(content); appendLine("```")
-                }
-                append(trimmed.ifEmpty { "请看图。" })
-            }
-        }
-
-        val userMsg = UiMessage(
-            id = UUID.randomUUID().toString(),
-            role = "user",
-            content = finalPrompt,
-            imageUrls = imageUrls
-        )
-        val assistantId = UUID.randomUUID().toString()
-        val assistantMsg = UiMessage(
-            id = assistantId,
-            role = "assistant",
-            content = "",
-            isStreaming = true
-        )
-        s.messages.add(userMsg)
-        s.messages.add(assistantMsg)
-        if (s.title == "新会话" && s.messages.size == 2) {
-            s.title = trimmed.take(30).ifEmpty { "图片对话" }
-        }
-        bump(id)
-        saveSnap(id, s)
-
-        // Bug 13 修复：vision 与否只看 **本次** 请求是否带图，不再扫历史。
-        // 历史里有图但本次没图 → 走纯文本 ChatRequest，避免把含图历史发给纯文本模型时被拒。
-        val isVisionThisTurn = imageUrls.isNotEmpty()
-        launchStream(id, s, assistantId, isVisionThisTurn, sendingFlow, errorFlow)
+    private fun reserve(id: String): Pair<Slot, Ticket>? = synchronized(guard) {
+        val slot = slot(id)
+        if (slot.ticket != null) return@synchronized null
+        store.retain(id)
+        val ticket = Ticket()
+        slot.ticket = ticket
+        slot.sending.value = true
+        slot.error.value = null
+        slot.notice.value = null
+        slot to ticket
     }
 
-    /**
-     * 启动一个 SSE 流任务：以 s.messages 末尾的 assistant 占位（assistantId）为输出目标，
-     * 历史取 `dropLast(1)`。被 [send] / [regenerate] / [retryLast] / [editAndResend] 复用。
-     * 调用前请确保占位 assistant 已经是 messages 的最后一条。
-     */
-    private fun launchStream(
-        id: String,
-        s: Session,
-        assistantId: String,
-        isVisionThisTurn: Boolean,
-        sendingFlow: MutableStateFlow<Boolean>,
-        errorFlow: MutableStateFlow<String?>
-    ) {
-        sendingFlow.value = true
-        errorFlow.value = null
-
-        jobs[id] = scope.launch {
+    private suspend fun launchRequest(id: String, request: Request): SendResult {
+        val (slot, ticket) = reserve(id) ?: return SendResult.Rejected("此会话正在处理请求，请先停止或稍后重试")
+        val receipt = CompletableDeferred<SendResult>()
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            var assistantId: String? = null
+            var committed = false
+            var failure: String? = null
+            var finishReason: String? = null
+            var stopped = false
             try {
-                suspend fun runOnce(model: String, prefix: String): Result<Unit> = runCatching {
-                    val flow: Flow<CopilotChatClient.ChatDelta> = if (isVisionThisTurn) {
-                        val visionMessages = s.messages.dropLast(1).map { ui ->
-                            val parts = mutableListOf<VisionContentPart>()
-                            if (ui.content.isNotEmpty()) {
-                                parts.add(VisionContentPart(type = "text", text = ui.content))
-                            }
-                            ui.imageUrls.forEach { url ->
-                                parts.add(
-                                    VisionContentPart(
-                                        type = "image_url",
-                                        imageUrl = VisionImageUrl(url = url)
-                                    )
-                                )
-                            }
-                            if (parts.isEmpty()) {
-                                parts.add(VisionContentPart(type = "text", text = ""))
-                            }
-                            VisionMessage(role = ui.role, content = parts)
+                val original = store.getSession(id) ?: throw SessionDeletedException()
+                if (request is Request.New && request.submissionId != null) {
+                    original.messages.firstOrNull {
+                        it.role == "user" && it.submissionId == request.submissionId
+                    }?.let {
+                        receipt.complete(SendResult.Accepted(it.id))
+                        return@launch
+                    }
+                }
+                val history = prepareHistory(original, request)
+                val user = history.last()
+                val needsVision = history.any { message ->
+                    message.imageUrls.isNotEmpty() || message.attachments.any { it.kind == AttachmentKind.IMAGE }
+                }
+                val model = catalog.requireModel(original.model, original.model.isBlank() && needsVision)
+                val prompt = promptBuilder.prepare(history, model)
+                currentCoroutineContext().ensureActive()
+                val responseId = UUID.randomUUID().toString()
+                assistantId = responseId
+                withContext(NonCancellable) {
+                    if (synchronized(guard) { ticket.stopRequested }) throw CancellationException("Stopped")
+                    store.update(id) { latest ->
+                        if (latest.messages != original.messages || latest.model != original.model) {
+                            throw com.tongxie.copilotgo.data.storage.SessionConflictException()
                         }
-                        chatClient.streamVisionChat(
-                            VisionRequest(model = model, messages = visionMessages, stream = true)
+                        latest.copy(
+                            model = if (latest.model.isBlank()) model.id else latest.model,
+                            title = if (latest.title == "新会话" && latest.messages.isEmpty()) {
+                                safeTitle(user.content.ifBlank { if (needsVision) "图片对话" else "附件对话" })
+                            } else latest.title,
+                            messages = (history + UiMessage(
+                                responseId, "assistant", "", isStreaming = true
+                            )).toMutableList()
                         )
-                    } else {
-                        val historyForModel = s.messages.dropLast(1)
-                            .map { ChatMessage(role = it.role, content = it.content) }
-                        chatClient.streamChat(
-                            ChatRequest(model = model, messages = historyForModel, stream = true)
-                        )
                     }
-
-                    // SSE collect 在 Main，上游已 flowOn(IO)。不要去掉 flowOn —— 否则 socket read 拉回 Main 触发 ANR (v0.1.7)。
-                    val buffer = StringBuilder()
-                    var lastSaveTime = System.currentTimeMillis()
-                    flow.collect { delta ->
-                        if (delta.text.isNotEmpty()) {
-                            buffer.append(delta.text)
-                            val rendered = prefix + buffer.toString()
-                            replaceAssistant(s, assistantId) {
-                                it.copy(content = rendered, isStreaming = true)
-                            }
-                            bump(id)
-                            // 节流持久化：每 800ms 一次（用户退出/进程崩溃时保留部分内容）
-                            val now = System.currentTimeMillis()
-                            if (now - lastSaveTime > 800) {
-                                lastSaveTime = now
-                                saveSnap(id, s)
-                            }
-                        }
-                    }
-                    replaceAssistant(s, assistantId) {
-                        it.copy(content = prefix + buffer.toString(), isStreaming = false)
-                    }
-                    bump(id)
+                    committed = true
+                    receipt.complete(SendResult.Accepted(user.id))
                 }
-
-                var result = runOnce(s.model, prefix = "")
-                val err1 = result.exceptionOrNull()
-                if (err1 != null && err1.message?.contains("model_not_supported") == true) {
-                    val fallback = Constants.DEFAULT_MODEL
-                    Logger.w("model ${s.model} not supported, fallback to $fallback")
-                    s.model = fallback
-                    val notice = "[已自动切换模型 → $fallback]\n"
-                    replaceAssistant(s, assistantId) {
-                        it.copy(content = notice, isStreaming = true)
-                    }
-                    bump(id)
-                    saveSnap(id, s)
-                    // Bug 6 修复：通过 prefix 把"已自动切换"提示与 buffer 拼接，避免 retry 第一帧把提示冲掉
-                    result = runOnce(fallback, prefix = notice)
+                if (prompt.truncated) {
+                    slot.notice.value = "较早的完整轮次已从本次请求中省略，原会话仍完整保留"
                 }
-
-                result.onFailure { e ->
-                    Logger.e("chat error", throwable = e)
-                    val friendly = friendlyError(e)
-                    errorFlow.value = friendly
-                    replaceAssistant(s, assistantId) {
-                        val newContent =
-                            (it.content.takeIf { c -> c.isNotBlank() } ?: "") + "[出错] $friendly"
-                        it.copy(content = newContent, isStreaming = false)
-                    }
-                }
-                replaceAssistant(s, assistantId) { it.copy(isStreaming = false) }
-                bump(id)
-                saveSnap(id, s)
+                finishReason = stream(id, responseId, prompt)
+                if (finishReason == "length") slot.notice.value = "本次回复已达到模型输出长度限制"
             } catch (e: CancellationException) {
-                // 用户主动 stop 或 purge：保留已收到的内容，清 streaming 标志，持久化（除非已 purge）
-                runCatching {
-                    replaceAssistant(s, assistantId) { it.copy(isStreaming = false) }
-                    bump(id)
-                    saveSnap(id, s)
-                }
+                stopped = true
+                receipt.complete(SendResult.Rejected("已取消发送，草稿已保留"))
                 throw e
-            } catch (e: Throwable) {
-                Logger.e("send fatal", throwable = e)
-                errorFlow.value = "意外错误：${e::class.simpleName}：${e.message ?: ""}"
-                runCatching {
-                    replaceAssistant(s, assistantId) {
-                        it.copy(
-                            content = it.content + "\n[内部错误] ${e::class.simpleName}",
-                            isStreaming = false
-                        )
-                    }
-                    bump(id)
-                    saveSnap(id, s)
-                }
+            } catch (e: Exception) {
+                failure = friendlyError(e)
+                slot.error.value = failure
+                receipt.complete(SendResult.Rejected(failure))
             } finally {
-                sendingFlow.value = false
-                jobs.remove(id)
+                if (committed && assistantId != null) {
+                    withContext(NonCancellable) {
+                        try {
+                            val messageId = assistantId
+                            store.update(id, persist = false) { latest ->
+                                latest.copy(messages = latest.messages.map { message ->
+                                    if (message.id != messageId) message else message.copy(
+                                        content = message.content.ifEmpty {
+                                            when {
+                                                stopped -> "[已停止]"
+                                                failure != null -> "[请求失败] $failure"
+                                                else -> "[模型未返回内容]"
+                                            }
+                                        },
+                                        isStreaming = false,
+                                        finishReason = when {
+                                            stopped -> "cancelled"
+                                            failure != null -> "error"
+                                            else -> finishReason ?: "stop"
+                                        }
+                                    )
+                                }.toMutableList())
+                            }
+                            store.persist(id)
+                        } catch (_: SessionDeletedException) {
+                            // Deletion is authoritative; a stopped stream must never recreate it.
+                        } catch (e: Exception) {
+                            slot.error.value = friendlyError(e)
+                        }
+                    }
+                }
             }
         }
+        startJob(id, slot, ticket, job) {
+            receipt.complete(SendResult.Rejected("请求已取消，草稿已保留"))
+        }
+        return receipt.await()
+    }
+
+    private suspend fun prepareHistory(session: Session, request: Request): List<UiMessage> {
+        return when (request) {
+            is Request.New -> {
+                if (request.text.length > Constants.MAX_PROMPT_CHARACTERS) {
+                    throw ModelUnavailableException("输入文字过长，请缩短后重试")
+                }
+                val text = request.text.trim()
+                if (text.isEmpty() && request.attachments.isEmpty() && request.imageUrls.isEmpty() && request.refs.isEmpty()) {
+                    throw ModelUnavailableException("请输入消息或选择附件")
+                }
+                if (request.submissionId != null && request.submissionId.length !in 1..128) {
+                    throw ModelUnavailableException("草稿标识无效，请重新打开会话")
+                }
+                if (request.attachments.size + request.imageUrls.size + request.refs.size > AttachmentStore.MAX_ATTACHMENTS) {
+                    throw ModelUnavailableException("每轮最多发送 8 个附件")
+                }
+                val refs = request.refs.toMutableList()
+                for ((index, textFile) in request.attachments.withIndex()) {
+                    refs.add(store.attachments.importText(textFile, "附件${index + 1}.txt"))
+                }
+                val remoteImages = mutableListOf<String>()
+                for (url in request.imageUrls) {
+                    if (url.startsWith("data:")) refs.add(store.attachments.importDataUri(url))
+                    else {
+                        PromptBuilder.validateImageUrl(url)
+                        remoteImages.add(url)
+                    }
+                }
+                if (refs.sumOf { it.sizeBytes } > AttachmentStore.MAX_TURN_BYTES) {
+                    throw ModelUnavailableException("每轮附件总大小不能超过 16 MiB")
+                }
+                refs.forEach { store.attachments.validate(it) }
+                session.messages + UiMessage(
+                    UUID.randomUUID().toString(), "user",
+                    text.ifEmpty { if (remoteImages.isNotEmpty() || refs.any { it.kind == AttachmentKind.IMAGE }) "请看图。" else "请阅读附件。" },
+                    imageUrls = remoteImages.toList(), attachments = refs.toList(), submissionId = request.submissionId
+                )
+            }
+            is Request.Regenerate -> {
+                val assistantIndex = session.messages.indexOfFirst { it.id == request.assistantId && it.role == "assistant" }
+                if (assistantIndex < 0) throw ModelUnavailableException("要重新生成的回复已不存在")
+                val userIndex = (assistantIndex - 1 downTo 0).firstOrNull { session.messages[it].role == "user" }
+                    ?: throw ModelUnavailableException("此回复没有对应的用户消息")
+                session.messages.take(userIndex + 1)
+            }
+            is Request.Edit -> {
+                val index = session.messages.indexOfFirst { it.id == request.userId && it.role == "user" }
+                if (index < 0) throw ModelUnavailableException("要编辑的消息已不存在")
+                val text = request.text.trim()
+                if (text.isEmpty() || text.length > Constants.MAX_PROMPT_CHARACTERS) {
+                    throw ModelUnavailableException("编辑内容不能为空或超过长度限制")
+                }
+                session.messages.take(index) + session.messages[index].copy(content = text)
+            }
+            Request.Retry -> {
+                val index = session.messages.indexOfLast { it.role == "user" }
+                if (index < 0) throw ModelUnavailableException("没有可重试的用户消息")
+                session.messages.take(index + 1)
+            }
+        }
+    }
+
+    private suspend fun stream(id: String, assistantId: String, prompt: PreparedPrompt): String? =
+        withContext(Dispatchers.Default) {
+            val flow = prompt.visionRequest?.let { chatClient.streamVisionChat(it) }
+                ?: chatClient.streamChat(requireNotNull(prompt.textRequest))
+            val buffer = StringBuilder()
+            var lastSave = System.currentTimeMillis()
+            var finishReason: String? = null
+            flow.collect { delta ->
+                if (delta.text.isNotEmpty()) {
+                    buffer.append(delta.text)
+                    val text = buffer.toString()
+                    store.update(id, persist = false) { latest ->
+                        latest.copy(messages = latest.messages.map { message ->
+                            if (message.id == assistantId) message.copy(content = text) else message
+                        }.toMutableList())
+                    }
+                    val now = System.currentTimeMillis()
+                    if (now - lastSave >= 800) {
+                        store.persist(id)
+                        lastSave = now
+                    }
+                }
+                if (delta.isFinal) finishReason = delta.finishReason
+            }
+            if (buffer.isBlank()) throw StreamProtocolException("模型未返回可显示的内容，请重试")
+            finishReason
+        }
+
+    private fun startJob(id: String, slot: Slot, ticket: Ticket, job: Job, completeIfNotStarted: () -> Unit) {
+        job.invokeOnCompletion {
+            completeIfNotStarted()
+            synchronized(guard) {
+                if (slot.ticket === ticket) {
+                    slot.ticket = null
+                    slot.sending.value = false
+                }
+                trimSlots()
+            }
+            store.release(id)
+        }
+        synchronized(guard) { ticket.job = job }
+        job.start()
+        if (synchronized(guard) { ticket.stopRequested }) job.cancel()
     }
 
     fun stop(id: String) {
-        jobs[id]?.cancel()
-    }
-
-    /**
-     * 重新生成指定 assistant 消息：截断到该消息之前，复用其对应的 user 请求重发一轮。
-     * （feat4/feat5：重试 / 重新生成）
-     */
-    fun regenerate(id: String, assistantMsgId: String) {
-        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
-        if (sendingFlow.value) return
-        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
-        scope.launch {
-            val s = sessionFlows[id]?.value ?: return@launch
-            val idx = s.messages.indexOfFirst { it.id == assistantMsgId }
-            if (idx < 0) return@launch
-            val userIdx = (idx - 1 downTo 0).firstOrNull { s.messages[it].role == "user" } ?: return@launch
-            val userMsg = s.messages[userIdx]
-            // 删除该 user 之后的所有消息（含旧 assistant 回复）
-            while (s.messages.size > userIdx + 1) s.messages.removeAt(s.messages.size - 1)
-            val assistantId = UUID.randomUUID().toString()
-            s.messages.add(UiMessage(id = assistantId, role = "assistant", content = "", isStreaming = true))
-            bump(id)
-            saveSnap(id, s)
-            launchStream(id, s, assistantId, userMsg.imageUrls.isNotEmpty(), sendingFlow, errorFlow)
+        synchronized(guard) {
+            slots[id]?.ticket?.let { it.stopRequested = true; it.job?.cancel() }
         }
     }
 
-    /** 重试最后一轮：重新生成最后一条 assistant 回复；若没有则对最后一条 user 触发一轮。 */
-    fun retryLast(id: String) {
-        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
-        if (sendingFlow.value) return
-        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
-        scope.launch {
-            val s = sessionFlows[id]?.value ?: return@launch
-            val lastAssistant = s.messages.lastOrNull { it.role == "assistant" }
-            if (lastAssistant != null) {
-                regenerate(id, lastAssistant.id)
-                return@launch
-            }
-            val lastUserIdx = s.messages.indexOfLast { it.role == "user" }
-            if (lastUserIdx < 0) return@launch
-            val userMsg = s.messages[lastUserIdx]
-            while (s.messages.size > lastUserIdx + 1) s.messages.removeAt(s.messages.size - 1)
-            val assistantId = UUID.randomUUID().toString()
-            s.messages.add(UiMessage(id = assistantId, role = "assistant", content = "", isStreaming = true))
-            bump(id)
-            saveSnap(id, s)
-            launchStream(id, s, assistantId, userMsg.imageUrls.isNotEmpty(), sendingFlow, errorFlow)
+    fun purge(id: String) = store.markDeleting(id)
+
+    suspend fun regenerateAndAwait(id: String, assistantMsgId: String): OperationResult =
+        launchRequest(id, Request.Regenerate(assistantMsgId)).toOperation()
+
+    suspend fun retryLastAndAwait(id: String): OperationResult =
+        launchRequest(id, Request.Retry).toOperation()
+
+    suspend fun editAndResendAndAwait(id: String, msgId: String, text: String): OperationResult =
+        launchRequest(id, Request.Edit(msgId, text)).toOperation()
+
+    fun regenerate(id: String, assistantMsgId: String) { scope.launch { regenerateAndAwait(id, assistantMsgId) } }
+    fun retryLast(id: String) { scope.launch { retryLastAndAwait(id) } }
+    fun editAndResend(id: String, msgId: String, text: String) { scope.launch { editAndResendAndAwait(id, msgId, text) } }
+
+    suspend fun deleteMessageAndAwait(id: String, msgId: String): OperationResult = mutate(id) {
+        store.update(id) { latest ->
+            if (latest.messages.none { it.id == msgId }) throw ModelUnavailableException("要删除的消息已不存在")
+            latest.copy(messages = latest.messages.filterNot { it.id == msgId }.toMutableList())
         }
     }
 
-    /** 删除单条消息（feat5）。流式进行中也允许删除非当前流的历史消息。 */
-    fun deleteMessage(id: String, msgId: String) {
-        scope.launch {
-            val s = sessionFlows[id]?.value ?: return@launch
-            val removed = s.messages.removeAll { it.id == msgId }
-            if (removed) {
-                bump(id)
-                saveSnap(id, s)
+    fun deleteMessage(id: String, msgId: String) { scope.launch { deleteMessageAndAwait(id, msgId) } }
+
+    suspend fun setModelAndAwait(id: String, model: String): OperationResult = mutate(id) {
+        if (model.isBlank()) throw ModelUnavailableException("请选择一个可用模型")
+        catalog.requireModel(model, needsVision = false)
+        store.update(id) { it.copy(model = model) }
+    }
+
+    fun setModel(id: String, model: String) { scope.launch { setModelAndAwait(id, model) } }
+
+    private suspend fun mutate(id: String, action: suspend () -> Unit): OperationResult {
+        val (slot, ticket) = reserve(id) ?: return OperationResult.Rejected("此会话正在处理请求，请先停止")
+        val receipt = CompletableDeferred<OperationResult>()
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                action()
+                receipt.complete(OperationResult.Accepted)
+            } catch (e: CancellationException) {
+                receipt.complete(OperationResult.Rejected("操作已取消"))
+                throw e
+            } catch (e: Exception) {
+                val message = friendlyError(e)
+                slot.error.value = message
+                receipt.complete(OperationResult.Rejected(message))
             }
         }
+        startJob(id, slot, ticket, job) { receipt.complete(OperationResult.Rejected("操作已取消")) }
+        return receipt.await()
     }
 
-    /**
-     * 编辑某条 user 消息内容并重发（feat5）：替换内容、截断其后所有消息、追加新 assistant 占位并重新流式。
-     */
-    fun editAndResend(id: String, msgId: String, newText: String) {
-        val trimmed = newText.trim()
-        if (trimmed.isEmpty()) return
-        val sendingFlow = sendingFlows.getOrPut(id) { MutableStateFlow(false) }
-        if (sendingFlow.value) return
-        val errorFlow = errorFlows.getOrPut(id) { MutableStateFlow(null) }
-        scope.launch {
-            val s = sessionFlows[id]?.value ?: return@launch
-            val idx = s.messages.indexOfFirst { it.id == msgId && it.role == "user" }
-            if (idx < 0) return@launch
-            val old = s.messages[idx]
-            s.messages[idx] = old.copy(content = trimmed)
-            while (s.messages.size > idx + 1) s.messages.removeAt(s.messages.size - 1)
-            val assistantId = UUID.randomUUID().toString()
-            s.messages.add(UiMessage(id = assistantId, role = "assistant", content = "", isStreaming = true))
-            bump(id)
-            saveSnap(id, s)
-            launchStream(id, s, assistantId, old.imageUrls.isNotEmpty(), sendingFlow, errorFlow)
-        }
+    private fun SendResult.toOperation(): OperationResult = when (this) {
+        is SendResult.Accepted -> OperationResult.Accepted
+        is SendResult.Rejected -> OperationResult.Rejected(message)
     }
 
-    private fun friendlyError(e: Throwable): String {
-        val raw = e.message ?: return "请求失败"
-        val msgRegex = Regex("\"message\"\\s*:\\s*\"([^\"]+)\"")
-        val codeRegex = Regex("\"code\"\\s*:\\s*\"([^\"]+)\"")
-        val m = msgRegex.find(raw)?.groupValues?.get(1)
-        val c = codeRegex.find(raw)?.groupValues?.get(1)
-        return when {
-            c == "model_not_supported" -> "当前模型不被订阅支持：${m ?: ""}"
-            raw.contains("Misdirected") -> "Endpoint 不匹配，请重新登录"
-            raw.contains("401") || raw.contains("unauthorized", true) -> "登录已失效，请重新登录"
-            raw.contains("429") -> "请求过于频繁，请稍后再试"
-            m != null -> m
-            else -> raw.take(200)
+    private fun trimSlots() {
+        val inactive = slots.filterValues {
+            it.ticket == null && it.owners == 0 && it.sending.subscriptionCount.value == 0 &&
+                it.error.subscriptionCount.value == 0 && it.notice.subscriptionCount.value == 0
         }
+        inactive.keys.take((inactive.size - maxInactiveSessions).coerceAtLeast(0)).forEach { slots.remove(it) }
+    }
+
+    private fun safeTitle(text: String): String {
+        val prefix = text.take(30)
+        return if (prefix.lastOrNull()?.isHighSurrogate() == true) prefix.dropLast(1) else prefix
+    }
+
+    private fun friendlyError(error: Exception): String = when (error) {
+        is AttachmentImportException -> error.userMessage
+        is SessionStorageException -> error.userMessage
+        is ModelUnavailableException -> error.message ?: "模型暂不可用"
+        is StreamProtocolException -> error.message ?: "响应中断，请重试"
+        else -> networkErrorMessage(error)
+    }
+
+    internal val cachedSlotCount: Int get() = synchronized(guard) { slots.size }
+
+    fun close() {
+        store.removeDeletionListener(deletionListener)
+        scope.cancel()
     }
 }

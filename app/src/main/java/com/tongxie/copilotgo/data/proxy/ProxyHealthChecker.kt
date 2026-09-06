@@ -2,13 +2,16 @@ package com.tongxie.copilotgo.data.proxy
 
 import com.tongxie.copilotgo.data.Constants
 import com.tongxie.copilotgo.data.auth.AuthRepository
-import com.tongxie.copilotgo.data.auth.executeAsync
+import com.tongxie.copilotgo.data.auth.withResponse
 import com.tongxie.copilotgo.data.net.HttpClientProvider
-import okhttp3.Credentials
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.ConnectException
-import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -42,73 +45,44 @@ class ProxyHealthChecker(
     }
 
     suspend fun check(): Outcome {
+        httpProvider.awaitReady()
         val client = httpProvider.client.newBuilder()
             .connectTimeout(6, TimeUnit.SECONDS)
             .readTimeout(6, TimeUnit.SECONDS)
             .callTimeout(10, TimeUnit.SECONDS)
             .build()
 
-        return checkWithClient(client, direct = false)
+        return checkWithClient(client, direct = client.proxy == Proxy.NO_PROXY)
     }
 
     suspend fun check(config: ProxyConfig): Outcome {
-        val builder = OkHttpClient.Builder()
-            .connectTimeout(6, TimeUnit.SECONDS)
-            .readTimeout(6, TimeUnit.SECONDS)
-            .callTimeout(10, TimeUnit.SECONDS)
-
-        val active = config.enabled && config.isValid()
-        var socksAuthUnverified = false
-        if (active) {
-            val proxyType = when (config.type) {
-                ProxyType.HTTP -> Proxy.Type.HTTP
-                ProxyType.SOCKS5 -> Proxy.Type.SOCKS
-            }
-            builder.proxy(Proxy(proxyType, InetSocketAddress(config.host, config.port)))
-
-            if (config.requiresAuth && config.type == ProxyType.HTTP) {
-                builder.proxyAuthenticator { _, response ->
-                    if (response.request.header("Proxy-Authorization") != null) {
-                        null
-                    } else {
-                        response.request.newBuilder()
-                            .header("Proxy-Authorization", Credentials.basic(config.username, config.password))
-                            .build()
-                    }
-                }
-            } else if (config.requiresAuth && config.type == ProxyType.SOCKS5) {
-                // OkHttp/JVM only drives SOCKS user/pass auth via the process-global Authenticator,
-                // which the live provider owns and reflects the *saved* config — not this unsaved form.
-                // Rather than racing that global state, we run the reachability test without form creds
-                // and clearly tell the user the credentials weren't validated.
-                socksAuthUnverified = true
-            }
-        } else {
-            builder.proxy(Proxy.NO_PROXY)
+        if (config.enabled && !config.isValid()) return Outcome.Err("代理地址或端口无效")
+        val client = try {
+            httpProvider.clientFor(config).newBuilder()
+                .connectTimeout(6, TimeUnit.SECONDS)
+                .readTimeout(6, TimeUnit.SECONDS)
+                .callTimeout(10, TimeUnit.SECONDS)
+                .build()
+        } catch (_: IllegalArgumentException) {
+            return Outcome.Err("请先保存 SOCKS5 认证配置，再测试连接")
         }
-
-        val outcome = checkWithClient(builder.build(), direct = !active)
-        return if (socksAuthUnverified) {
-            val note = "\nℹ️ 注意：SOCKS5 账号/密码无法在此测试中验证，以上仅为代理可达性结果；请保存后实际使用以确认认证。"
-            when (outcome) {
-                is Outcome.Ok -> Outcome.Ok(outcome.message + note)
-                is Outcome.Warn -> Outcome.Warn(outcome.message + note)
-                is Outcome.Err -> outcome
-            }
-        } else {
-            outcome
-        }
+        return checkWithClient(client, direct = !config.enabled)
     }
 
     private suspend fun checkWithClient(client: OkHttpClient, direct: Boolean): Outcome {
-        val (req, apiBase) = buildRequest()
         val start = System.currentTimeMillis()
         return try {
-            val resp = client.newCall(req).executeAsync()
-            val elapsed = System.currentTimeMillis() - start
-            val code = resp.code
-            resp.close()
-            mapResponse(code, elapsed, apiBase, direct)
+            withTimeout(12_000) {
+                val (req, apiBase) = buildRequest()
+                client.newCall(req).withResponse { resp ->
+                    mapResponse(resp.code, System.currentTimeMillis() - start, apiBase, direct)
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            Outcome.Err("连接测试超时，请检查网络或代理")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: SocketTimeoutException) {
             val elapsed = System.currentTimeMillis() - start
             Outcome.Err(
@@ -126,13 +100,14 @@ class ProxyHealthChecker(
                 "❌ DNS 解析失败：${e.message ?: "UnknownHostException"}\n" +
                         "模拟器 host 用 10.0.2.2；真机用 PC/路由器 LAN IP，手机本机 Clash 才用 127.0.0.1"
             )
-        } catch (e: Throwable) {
-            Outcome.Err("❌ 失败：${e::class.simpleName}：${e.message ?: ""}")
+        } catch (_: Exception) {
+            Outcome.Err("连接测试未完成，请检查网络、代理与登录状态")
         }
     }
 
     private suspend fun buildRequest(): Pair<Request, String> {
-        val session = runCatching { auth.getValidCopilotSession() }.getOrNull()
+        // A draft proxy test must not refresh a token through the *saved* (possibly broken) route.
+        val session = auth.getCachedCopilotSession()
         val apiBase = session?.apiBase ?: Constants.COPILOT_API_BASE
         val builder = Request.Builder()
             .url("$apiBase/models")

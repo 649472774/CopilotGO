@@ -37,4 +37,17 @@ class SseParserTest {
         val lines = SseParser.lines(source(sse)).toList()
         assertEquals(listOf("""{"x":3}"""), lines)
     }
+
+    @Test
+    fun joins_multiline_event_data_and_preserves_error_name() = runTest {
+        val events = SseParser.events(source(
+            "\uFEFF: keepalive\r\nevent: error\r\nid: 42\r\ndata: {\"error\":\r\ndata: {\"code\":\"busy\"}}\r\n\r\n"
+        )).toList()
+        assertEquals(listOf(SseEvent("error", "{\"error\":\n{\"code\":\"busy\"}}", "42")), events)
+    }
+
+    @Test
+    fun dispatches_error_even_without_data() = runTest {
+        assertEquals(listOf(SseEvent("error", "")), SseParser.events(source("event: error\n\n")).toList())
+    }
 }
