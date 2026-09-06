@@ -1,6 +1,5 @@
 package com.tongxie.copilotgo.data.proxy
 
-import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -8,6 +7,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.tongxie.copilotgo.data.auth.MemoryVault
 import com.tongxie.copilotgo.data.auth.withResponse
 import com.tongxie.copilotgo.data.net.ProxyAwareHttpClientProvider
+import com.tongxie.copilotgo.data.storage.preferenceDataStoreFixture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,7 +27,6 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
 import java.net.InetSocketAddress
-import okio.Path.Companion.toPath
 
 class ProxyReadinessTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -78,9 +77,7 @@ class ProxyReadinessTest {
     fun encryptedMigrationCompletesBeforeProxyIsReady() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val legacy = PreferenceDataStoreFactory.createWithPath(scope = scope) {
-                File(temporary.root, "proxy.preferences_pb").absolutePath.toPath()
-            }
+            val legacy = preferenceDataStoreFixture(File(temporary.root, "proxy.preferences_pb"), scope)
             legacy.edit {
                 it[booleanPreferencesKey("enabled")] = true
                 it[stringPreferencesKey("host")] = "127.0.0.1"
@@ -103,9 +100,7 @@ class ProxyReadinessTest {
     fun failedMigrationBlocksNetworkRatherThanPretendingDirectDefaultsWereLoaded() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val legacy = PreferenceDataStoreFactory.createWithPath(scope = scope) {
-                File(temporary.root, "failed-proxy.preferences_pb").absolutePath.toPath()
-            }
+            val legacy = preferenceDataStoreFixture(File(temporary.root, "failed-proxy.preferences_pb"), scope)
             legacy.edit { it[booleanPreferencesKey("enabled")] = true }
             val store = ProxySettingsStore(legacy, MemoryVault().apply { fail = true }, scope)
             withTimeout(3000) { store.initialized.first { it } }
