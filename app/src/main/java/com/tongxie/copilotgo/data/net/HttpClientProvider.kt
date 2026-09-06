@@ -3,117 +3,125 @@ package com.tongxie.copilotgo.data.net
 import com.tongxie.copilotgo.data.proxy.ProxyConfig
 import com.tongxie.copilotgo.data.proxy.ProxyType
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import okhttp3.Authenticator as OkHttpAuthenticator
+import kotlinx.coroutines.withContext
+import okhttp3.Authenticator
 import okhttp3.Credentials
 import okhttp3.OkHttpClient
-import java.net.Authenticator as JavaNetAuthenticator
-import java.net.Authenticator.RequestorType
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.PasswordAuthentication
 import java.net.Proxy
+import java.net.Authenticator as NetworkAuthenticator
 
 interface HttpClientProvider {
     val client: OkHttpClient
+    suspend fun awaitReady() = Unit
+
+    fun clientFor(config: ProxyConfig): OkHttpClient =
+        configureProxy(client.newBuilder(), config).build()
+}
+
+internal fun configureProxy(builder: OkHttpClient.Builder, config: ProxyConfig): OkHttpClient.Builder {
+    require(!config.enabled || config.isValid()) { "代理地址或端口无效" }
+    builder.proxyAuthenticator(Authenticator.NONE)
+    if (!config.enabled) return builder.proxy(Proxy.NO_PROXY)
+    val type = if (config.type == ProxyType.HTTP) Proxy.Type.HTTP else Proxy.Type.SOCKS
+    builder.proxy(Proxy(type, InetSocketAddress.createUnresolved(config.host, config.port)))
+    if (config.type == ProxyType.HTTP && config.requiresAuth) {
+        builder.proxyAuthenticator { _, response ->
+            if (response.request.header("Proxy-Authorization") != null) null
+            else response.request.newBuilder()
+                .header("Proxy-Authorization", Credentials.basic(config.username, config.password))
+                .build()
+        }
+    }
+    return builder
 }
 
 class ProxyAwareHttpClientProvider(
     private val baseBuilder: () -> OkHttpClient.Builder,
-    proxyConfigFlow: StateFlow<ProxyConfig>,
-    scope: CoroutineScope
+    private val proxyConfigFlow: StateFlow<ProxyConfig>,
+    scope: CoroutineScope,
+    private val readiness: StateFlow<Boolean>? = null,
+    private val configurationError: StateFlow<String?>? = null
 ) : HttpClientProvider {
-
+    private val guard = Any()
+    private var applied: ProxyConfig = proxyConfigFlow.value
     @Volatile
-    override var client: OkHttpClient = buildClient(proxyConfigFlow.value)
+    override var client: OkHttpClient = buildClient(applied)
         private set
 
     init {
         scope.launch {
-            proxyConfigFlow.collect { config ->
-                val old = client
-                client = buildClient(config)
-                runCatching { old.connectionPool.evictAll() }
-                runCatching { old.dispatcher.executorService.shutdown() }
-            }
+            proxyConfigFlow.collect { config -> apply(config) }
         }
+    }
+
+    override suspend fun awaitReady() {
+        readiness?.first { it }
+        configurationError?.value?.let { throw IOException(it) }
+        withContext(Dispatchers.IO) { apply(proxyConfigFlow.value) }
+    }
+
+    override fun clientFor(config: ProxyConfig): OkHttpClient {
+        if (config.enabled && config.type == ProxyType.SOCKS5 && config.requiresAuth && config != applied) {
+            throw IllegalArgumentException("请先保存 SOCKS5 认证配置，再测试连接")
+        }
+        return configureProxy(baseBuilder(), config).build()
+    }
+
+    private fun apply(config: ProxyConfig) = synchronized(guard) {
+        if (config == applied) return@synchronized
+        val next = buildClient(config)
+        val old = client
+        client = next
+        applied = config
+        old.connectionPool.evictAll()
+        // Do not shut down dispatchers: an in-flight call can still need them on retry.
     }
 
     private fun buildClient(config: ProxyConfig): OkHttpClient {
-        val builder = baseBuilder()
-        if (config.enabled && config.isValid()) {
-            val proxyType = when (config.type) {
-                ProxyType.HTTP -> Proxy.Type.HTTP
-                ProxyType.SOCKS5 -> Proxy.Type.SOCKS
-            }
-            builder.proxy(Proxy(proxyType, InetSocketAddress(config.host, config.port)))
-
-            when (config.type) {
-                ProxyType.HTTP -> {
-                    clearSocksAuthenticator()
-                    if (config.requiresAuth) {
-                        builder.proxyAuthenticator(OkHttpAuthenticator { _, response ->
-                            if (response.request.header("Proxy-Authorization") != null) {
-                                null
-                            } else {
-                                response.request.newBuilder()
-                                    .header(
-                                        "Proxy-Authorization",
-                                        Credentials.basic(config.username, config.password)
-                                    )
-                                    .build()
-                            }
-                        })
-                    }
+        configureSocksAuthentication(config)
+        return configureProxy(baseBuilder(), config)
+            .addInterceptor { chain ->
+                if (readiness?.value == false || configurationError?.value != null) {
+                    throw IOException("代理配置尚未就绪，请稍后重试")
                 }
-                ProxyType.SOCKS5 -> {
-                    if (config.requiresAuth) {
-                        installSocksAuthenticator(config)
-                    } else {
-                        clearSocksAuthenticator()
-                    }
+                chain.proceed(chain.request())
+            }
+            .build()
+    }
+
+    private fun configureSocksAuthentication(config: ProxyConfig) = synchronized(authenticatorLock) {
+        val needsSocks = config.enabled && config.type == ProxyType.SOCKS5 && config.requiresAuth
+        installedConfig = config.takeIf { needsSocks }
+        if (!needsSocks || installedAuthenticator != null) return@synchronized
+        // Android exposes no getDefault(). Install once, then revoke by clearing the scoped config.
+        val authenticator = object : NetworkAuthenticator() {
+            override fun getPasswordAuthentication(): PasswordAuthentication? {
+                val selected = installedConfig ?: return null
+                val hostMatches = requestingHost.equals(selected.host, ignoreCase = true) ||
+                    requestingSite?.hostAddress == selected.host
+                val socksRequest = requestingProtocol.equals("SOCKS5", ignoreCase = true)
+                return if (hostMatches && requestingPort == selected.port && socksRequest) {
+                    PasswordAuthentication(selected.username, selected.password.toCharArray())
+                } else {
+                    null
                 }
             }
-        } else {
-            builder.proxy(Proxy.NO_PROXY)
-            clearSocksAuthenticator()
         }
-        return builder.build()
+        NetworkAuthenticator.setDefault(authenticator)
+        installedAuthenticator = authenticator
     }
-
-    private fun installSocksAuthenticator(config: ProxyConfig) {
-        val authKey = SocksAuthKey(config.username, config.password)
-        synchronized(authenticatorLock) {
-            if (installedSocksAuthKey == authKey) return
-            // SOCKS credentials are process-global in Java; OkHttp proxyAuthenticator is HTTP-only.
-            // Gate on RequestorType.PROXY so these creds are never handed to non-proxy requestors.
-            JavaNetAuthenticator.setDefault(object : JavaNetAuthenticator() {
-                override fun getPasswordAuthentication(): PasswordAuthentication? =
-                    if (requestorType == RequestorType.PROXY) {
-                        PasswordAuthentication(config.username, config.password.toCharArray())
-                    } else {
-                        null
-                    }
-            })
-            installedSocksAuthKey = authKey
-            authenticatorCleared = false
-        }
-    }
-
-    private fun clearSocksAuthenticator() {
-        synchronized(authenticatorLock) {
-            if (installedSocksAuthKey == null && authenticatorCleared) return
-            JavaNetAuthenticator.setDefault(null)
-            installedSocksAuthKey = null
-            authenticatorCleared = true
-        }
-    }
-
-    private data class SocksAuthKey(val username: String, val password: String)
 
     companion object {
         private val authenticatorLock = Any()
-        private var installedSocksAuthKey: SocksAuthKey? = null
-        private var authenticatorCleared = false
+        private var installedAuthenticator: NetworkAuthenticator? = null
+        @Volatile
+        private var installedConfig: ProxyConfig? = null
     }
 }
