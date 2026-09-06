@@ -336,6 +336,9 @@ class RemoteWebViewTest {
         showFixture()
         val view = awaitPage()
         val softInputMode = compose.activity.window.attributes.softInputMode
+        val bars = WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
+        val lightStatus = bars.isAppearanceLightStatusBars
+        val lightNavigation = bars.isAppearanceLightNavigationBars
         val layouts = AtomicInteger()
         compose.runOnUiThread {
             view.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
@@ -360,17 +363,22 @@ class RemoteWebViewTest {
             assertTrue("WebView must end above the keyboard", bottom <= root.height - inset + 2)
         }
         assertTrue("Chromium should not resize every animation frame: ${layouts.get()}", layouts.get() <= 6)
+        assertComposerVisible()
         evaluate("window.scrollTo(0,640)")
         val scroll = evaluate("Math.round(window.scrollY)").toInt()
+        assertComposerVisible()
         capture("remote-ime")
         Espresso.pressBack()
         awaitIme(visible = false)
         compose.onNodeWithContentDescription("关闭网页，返回会话列表").assertIsDisplayed()
         assertTrue(abs(evaluate("Math.round(window.scrollY)").toInt() - scroll) <= 2)
+        assertComposerVisible()
         assertEquals(softInputMode, compose.activity.window.attributes.softInputMode)
         Espresso.pressBack()
         compose.onNodeWithText("Return to Remote").assertIsDisplayed()
         assertEquals(softInputMode, compose.activity.window.attributes.softInputMode)
+        assertEquals(lightStatus, bars.isAppearanceLightStatusBars)
+        assertEquals(lightNavigation, bars.isAppearanceLightNavigationBars)
         capture("remote-returned-native")
     }
 
@@ -479,6 +487,19 @@ class RemoteWebViewTest {
             val bounds = compose.onNodeWithContentDescription(description).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
             assertTrue(description, bounds.width / density >= 47.9f && bounds.height / density >= 47.9f)
         }
+    }
+
+    private fun assertComposerVisible() {
+        val visible = evaluate("""
+            (function(){
+              var rect=document.getElementById('composer').getBoundingClientRect();
+              var viewport=window.visualViewport;
+              var top=viewport ? viewport.offsetTop : 0;
+              var height=viewport ? viewport.height : window.innerHeight;
+              return rect.height > 0 && rect.top >= top-1 && rect.bottom <= top+height+1;
+            })()
+        """.trimIndent())
+        assertEquals("The composer itself must remain inside Chromium's visible viewport", "true", visible)
     }
 
     private fun capture(name: String) {
