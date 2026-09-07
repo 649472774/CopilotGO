@@ -1,6 +1,7 @@
 package com.tongxie.copilotgo.ui
 
 import android.view.WindowManager
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +39,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -190,8 +192,16 @@ class AgentSettingsAcceptanceTest {
         assertTrue(fixture.editor.state.value.server!!.dirty)
         rule.onNodeWithText(text(R.string.tool_settings_load_failed)).assertIsDisplayed()
         fixture.vault.failWrites.set(false)
+        storageRecoveryEvidence("tool-storage-before-retry-scroll", fixture)
+        val readsBeforeRetry = fixture.vault.readCalls.get()
+        rule.onNodeWithText(text(R.string.tool_settings_retry)).performScrollTo()
+            .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp)
+        storageRecoveryEvidence("tool-storage-before-retry-click", fixture)
         rule.onNodeWithText(text(R.string.tool_settings_retry)).performClick()
+        storageRecoveryEvidence("tool-storage-after-retry-click", fixture)
         rule.waitUntil(10_000) { fixture.store.state.value.problem == null && !fixture.store.state.value.loading }
+        assertTrue("The visible retry must actually re-read the vault", fixture.vault.readCalls.get() > readsBeforeRetry)
+        storageRecoveryEvidence("tool-storage-reloaded", fixture)
         scroll(MCP_LIST, "tool-settings-save").assertIsEnabled().performClick()
         rule.waitUntil(10_000) { fixture.editor.state.value.savedNotice && fixture.editor.state.value.pending == null }
         assertEquals("保存失败仍保留草稿", fixture.store.state.value.snapshot!!.servers.single().label)
@@ -424,6 +434,26 @@ class AgentSettingsAcceptanceTest {
         }
     }
 
+    private fun storageRecoveryEvidence(name: String, fixture: Fixture) {
+        val directory = File(rule.activity.getExternalFilesDir(null), "agent-acceptance")
+        assertTrue(directory.isDirectory || directory.mkdirs())
+        val targets = rule.onAllNodesWithText(
+            text(R.string.tool_settings_retry), useUnmergedTree = true
+        ).fetchSemanticsNodes().joinToString("\n") { node ->
+            "retry placed=${node.layoutInfo.isPlaced}; position=${node.positionInWindow}; " +
+                "size=${node.size}; visibleBounds=${node.boundsInWindow}"
+        }
+        val state = fixture.store.state.value
+        val ui = fixture.editor.state.value
+        val details = "uptime=${SystemClock.uptimeMillis()}; storeLoading=${state.loading}; " +
+            "storeProblem=${state.problem?.code}; pending=${ui.pending}; uiProblem=${ui.problem?.code}; " +
+            "dirty=${ui.server?.dirty}; reads=${fixture.vault.readCalls.get()}; writes=${fixture.vault.writeCalls.get()}"
+        File(directory, "$name.txt").writeText(
+            details + "\n" + targets + "\n" + rule.onRoot(useUnmergedTree = true).printToString()
+        )
+        screenshot(name)
+    }
+
     @Composable
     private fun FixtureTheme(content: @Composable () -> Unit) {
         val density = LocalDensity.current
@@ -482,8 +512,14 @@ class AgentSettingsAcceptanceTest {
         val failWrites = AtomicBoolean()
         val gate = AtomicReference<CompletableDeferred<Unit>?>(null)
         val writeStarted = CompletableDeferred<Unit>()
-        override suspend fun read(name: String): String? = records[name]
+        val readCalls = AtomicInteger()
+        val writeCalls = AtomicInteger()
+        override suspend fun read(name: String): String? {
+            readCalls.incrementAndGet()
+            return records[name]
+        }
         override suspend fun write(name: String, value: String) {
+            writeCalls.incrementAndGet()
             gate.get()?.let {
                 writeStarted.complete(Unit)
                 it.await()
