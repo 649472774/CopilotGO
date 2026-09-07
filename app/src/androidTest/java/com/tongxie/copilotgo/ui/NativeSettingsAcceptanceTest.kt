@@ -101,9 +101,9 @@ class NativeSettingsAcceptanceTest {
     private val fixtures = mutableListOf<Fixture>()
 
     @Before fun prepareWindow() {
-        rule.activity.runOnUiThread {
-            rule.activity.enableEdgeToEdge()
-            rule.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        rule.activityRule.scenario.onActivity { activity ->
+            activity.enableEdgeToEdge()
+            activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
     }
 
@@ -274,8 +274,9 @@ class NativeSettingsAcceptanceTest {
     private fun saveScreenshot(name: String, dialog: Boolean = false) {
         val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
         assertTrue(directory.isDirectory || directory.mkdirs())
-        val bitmap = (if (dialog) rule.onNode(isDialog()) else rule.onRoot()).captureToImage().asAndroidBitmap()
-        saveNativeScreenshotEvidence(bitmap, directory, name)
+        saveNativeScreenshotEvidence(rule.activity, directory, name) {
+            (if (dialog) rule.onNode(isDialog()) else rule.onRoot()).captureToImage().asAndroidBitmap()
+        }
     }
 
     @Composable
