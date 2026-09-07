@@ -143,4 +143,14 @@ class AgentPromptBuilderTest {
         assertTrue(result.text.contains("    [S999] indented code"))
         assertTrue(result.text.endsWith("\nbad"))
     }
+
+    @Test
+    fun citationGroundingPreservesMultilineCodeSpansAndEscapedLiteralMarkers() {
+        val code = "``a multiline\n[S999] [literal](https://example.invalid)\ncode span``"
+        val literals = "\\[S999] and \\[literal](https://example.invalid)"
+        val grounded = AgentCitations.ground("$code\n$literals\nUnsupported [S999]", emptyList())
+        assertTrue(grounded.text.startsWith("$code\n$literals\n"))
+        assertTrue(grounded.text.endsWith("Unsupported "))
+        assertTrue(grounded.removedUnsupportedReferences)
+    }
 }

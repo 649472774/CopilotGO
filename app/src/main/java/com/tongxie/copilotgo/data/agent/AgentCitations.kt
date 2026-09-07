@@ -11,15 +11,20 @@ internal object AgentCitations {
         val ids = sources.map { "[${it.id}]" }.toSet()
         val urls = sources.map { it.url }.toSet()
         var removed = false
+        fun escaped(value: String, offset: Int): Boolean {
+            var index = offset - 1
+            while (index >= 0 && value[index] == '\\') index--
+            return (offset - index - 1) % 2 == 1
+        }
         fun prose(value: String): String {
             val references = citation.replace(value) {
-                if (it.value in ids) it.value else {
+                if (it.value in ids || escaped(value, it.range.first)) it.value else {
                     removed = true
                     ""
                 }
             }
             return link.replace(references) {
-                if (it.groupValues[2] in urls) it.value else {
+                if (it.groupValues[2] in urls || escaped(references, it.range.first)) it.value else {
                     removed = true
                     it.groupValues[1]
                 }
@@ -53,6 +58,11 @@ internal object AgentCitations {
         val grounded = buildString {
             var position = 0
             var openFence: String? = null
+            val pendingProse = StringBuilder()
+            fun flushProse() {
+                append(inline(pendingProse.toString()))
+                pendingProse.clear()
+            }
             while (position < text.length) {
                 val end = text.indexOf('\n', position).let { if (it < 0) text.length else it + 1 }
                 val line = text.substring(position, end)
@@ -64,13 +74,16 @@ internal object AgentCitations {
                         marker.groupValues[1].length >= current.length && marker.groupValues[2].isBlank()
                     ) openFence = null
                 } else if (marker != null) {
+                    flushProse()
                     openFence = marker.groupValues[1]
                     append(line)
                 } else if (line.startsWith("    ") || line.startsWith("\t")) {
+                    flushProse()
                     append(line)
-                } else append(inline(line))
+                } else pendingProse.append(line)
                 position = end
             }
+            flushProse()
         }
         return GroundedAgentText(grounded, removed)
     }
