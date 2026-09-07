@@ -60,7 +60,7 @@ fun SearchToolSettingsScreen(
     val ui by viewModel.state.collectAsStateWithLifecycle()
     val form = ui.search
     val secret = rememberToolSecretInput(viewModel, ToolSettingsLimits.MAX_CREDENTIAL_CHARS)
-    val snackbar = rememberToolSettingsFeedback(ui.problem)
+    val snackbar = rememberToolSettingsFeedback(ui.problem, settings.problem)
     val scope = rememberCoroutineScope()
     val openDocumentation = rememberAgentSourceOpener { message ->
         scope.launch { snackbar.showSnackbar(message) }

@@ -50,11 +50,18 @@ internal fun toolSettingsProblemMessage(problem: ToolProblem): String = problem.
 } ?: problem.message
 
 @Composable
-internal fun rememberToolSettingsFeedback(problem: ToolProblem?): SnackbarHostState {
+internal fun rememberToolSettingsFeedback(
+    problem: ToolProblem?,
+    blockingConfigurationProblem: ToolProblem? = null
+): SnackbarHostState {
     val snackbar = remember { SnackbarHostState() }
-    val message = problem?.let { toolSettingsProblemMessage(it) }
-    LaunchedEffect(problem) {
-        if (message != null) snackbar.showSnackbar(
+    val transientProblem = problem.takeIf { blockingConfigurationProblem == null }
+    val message = transientProblem?.let { toolSettingsProblemMessage(it) }
+    LaunchedEffect(transientProblem, blockingConfigurationProblem) {
+        if (blockingConfigurationProblem != null) {
+            // The persistent recovery screen already announces this error and owns its retry action.
+            snackbar.currentSnackbarData?.dismiss()
+        } else if (message != null) snackbar.showSnackbar(
             message, withDismissAction = true, duration = SnackbarDuration.Long
         )
     }

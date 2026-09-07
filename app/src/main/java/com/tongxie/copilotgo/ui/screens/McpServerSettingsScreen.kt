@@ -79,7 +79,7 @@ fun McpServerSettingsScreen(
     val saved = settings.snapshot?.servers?.firstOrNull { it.id == form?.serverId }
     val secretIdentity = remember(viewModel, serverId) { Any() }
     val secret = rememberToolSecretInput(secretIdentity, ToolSettingsLimits.MAX_CREDENTIAL_CHARS)
-    val snackbar = rememberToolSettingsFeedback(ui.problem)
+    val snackbar = rememberToolSettingsFeedback(ui.problem, settings.problem)
     val focus = LocalFocusManager.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentOnBack by rememberUpdatedState(onBack)
