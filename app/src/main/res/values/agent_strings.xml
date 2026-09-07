@@ -14,6 +14,7 @@
     <string name="agent_model_incompatible">所选模型不支持当前聊天接口，无法用于 Agent。请选择兼容模型。</string>
     <string name="agent_model_no_tools">模型目录未声明此模型支持工具调用，请选择支持工具的模型。</string>
     <string name="agent_mode_stale">会话选项已发生变化。请返回并重新打开，避免覆盖新设置。</string>
+    <string name="agent_mode_busy">请等待本次回复或设置保存结束后再切换模式。草稿会保留。</string>
     <string name="agent_external_scope_title">外部请求与权限</string>
     <string name="agent_external_scope">搜索词会发送给服务商；读取网页会连接对应网站。GitHub / Copilot 凭据不会发送给工具。工具返回的内容不是授权指令。</string>
     <string name="agent_auto_public_reads">允许此会话自动执行公开网页读取</string>
@@ -25,12 +26,14 @@
     <string name="agent_limits_output">参数上限 %1$d 字节；单次结果 %2$d 字节，累计结果 %3$d 字节；上下文 %4$d 字节。</string>
     <string name="agent_limits_preserve">到达上限或失败时会停止并保留已有回答。停止不会清空下一条草稿，也不代表远程操作已撤销。</string>
     <string name="agent_tools_settings">搜索与 MCP 设置</string>
+    <string name="agent_tools_summary">免密钥搜索、公开网页读取、远程 HTTPS 工具与单次授权</string>
     <string name="agent_settings_loading">工具设置尚未就绪，当前不会自动授权外部请求。</string>
     <string name="agent_settings_failed">工具设置无法读取，请打开搜索与 MCP 设置处理。不会使用替代连接或凭据。</string>
     <string name="agent_provider_keyless">搜索服务：Exa 免密钥基础搜索。免费额度有限，可能限流；不是无限或保证可用的服务。</string>
     <string name="agent_provider_own_key">搜索服务：Exa API，使用你单独保存的服务商密钥；受服务商账户额度和计费规则约束。</string>
     <string name="agent_web_disabled">内置搜索和网页读取当前均未启用。</string>
     <string name="agent_web_no_consent">尚未同意向搜索服务和网站分享请求，内置网页工具不可执行。</string>
+    <string name="agent_web_missing_key">所选搜索服务尚未配置密钥，搜索不会执行；已启用的公开网页读取不依赖此密钥。</string>
     <string name="agent_mcp_enabled_count">已启用 %1$d 个 MCP 配置；可用工具以实际发现结果为准。</string>
     <string name="agent_activity_title">工具活动</string>
     <string name="agent_review_pending_short">待确认</string>
@@ -61,6 +64,7 @@
     <string name="agent_review_current">检查当前待确认请求</string>
     <string name="agent_approval_title">确认这一次调用</string>
     <string name="agent_destination">实际请求目标</string>
+    <string name="agent_destination_preview">目标地址已缩短，请展开查看完整内容。</string>
     <string name="agent_approval_scope">仅授权下方这一次调用。账号、服务器配置、工具定义或参数变化后，此确认立即失效。</string>
     <string name="agent_approval_identity">配置：%1$s（修订 %2$d）\n调用：%3$s</string>
     <string name="agent_arguments">完整参数（可滚动查看）</string>
@@ -76,6 +80,8 @@
     <string name="agent_approval_unavailable">当前页面不能提交工具决定，请重新打开此会话。不会在后台默认批准。</string>
     <string name="agent_run_missing">此任务已被移除或不再可用。</string>
     <string name="agent_tool_result">实际返回内容</string>
+    <string name="agent_call_expand">查看参数、目标与返回内容</string>
+    <string name="agent_call_collapse">收起调用详情</string>
     <string name="agent_tool_error">工具返回错误</string>
     <string name="agent_result_limited">工具结果达到大小上限，返回内容已明确截断。</string>
     <string name="agent_output_preview">为保持流畅，此处仅预览前 8,192 个字符。</string>
