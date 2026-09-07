@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,7 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -24,10 +29,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,16 +44,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.VisualTransformation
 import com.tongxie.copilotgo.R
 
 object ChatTags {
@@ -61,6 +70,7 @@ object ChatTags {
     const val LATEST = "chat_latest"
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatComposer(
     text: String,
@@ -86,6 +96,10 @@ fun ChatComposer(
     var addMenu by remember { mutableStateOf(false) }
     val canEdit = enabled && !submitting
     val canSubmit = canEdit && submissionEnabled && !importing && (text.isNotBlank() || attachments.isNotEmpty())
+    val editorInteraction = remember { MutableInteractionSource() }
+    val editorFocused by editorInteraction.collectIsFocusedAsState()
+    val editorColors = OutlinedTextFieldDefaults.colors()
+    val editorLabel = stringResource(R.string.composer_label)
 
     Surface(modifier = modifier, tonalElevation = 2.dp) {
         BoxWithConstraints(Modifier.padding(horizontal = 16.dp)) {
@@ -117,16 +131,46 @@ fun ChatComposer(
                                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                             )
                         }
-                        OutlinedTextField(
+                        BasicTextField(
                             value = text,
                             onValueChange = onTextChange,
                             enabled = canEdit,
-                            label = { Text(stringResource(R.string.composer_label)) },
-                            placeholder = { Text(stringResource(R.string.chat_input_hint)) },
                             maxLines = if (inlineActions) 1 else if (compactHeight) 2 else 6,
-                            shape = MaterialTheme.shapes.large,
-                            textStyle = MaterialTheme.typography.bodyLarge,
+                            interactionSource = editorInteraction,
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = when {
+                                !canEdit -> editorColors.disabledTextColor
+                                editorFocused -> editorColors.focusedTextColor
+                                else -> editorColors.unfocusedTextColor
+                            }),
                             modifier = Modifier.fillMaxWidth().testTag(ChatTags.INPUT)
+                                .padding(top = if (inlineActions) 0.dp else 8.dp)
+                                .defaultMinSize(minHeight = if (inlineActions) 48.dp else 56.dp)
+                                .then(if (inlineActions) Modifier.semantics { contentDescription = editorLabel } else Modifier),
+                            decorationBox = { innerTextField ->
+                                OutlinedTextFieldDefaults.DecorationBox(
+                                    value = text,
+                                    innerTextField = innerTextField,
+                                    enabled = canEdit,
+                                    singleLine = false,
+                                    visualTransformation = VisualTransformation.None,
+                                    interactionSource = editorInteraction,
+                                    label = if (inlineActions) null else { { Text(editorLabel) } },
+                                    placeholder = { Text(stringResource(R.string.chat_input_hint)) },
+                                    colors = editorColors,
+                                    contentPadding = if (inlineActions) PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                        else OutlinedTextFieldDefaults.contentPadding(),
+                                    container = {
+                                        OutlinedTextFieldDefaults.Container(
+                                            enabled = canEdit,
+                                            isError = false,
+                                            interactionSource = editorInteraction,
+                                            colors = editorColors,
+                                            shape = MaterialTheme.shapes.large
+                                        )
+                                    }
+                                )
+                            }
                         )
                         supportingText?.let {
                             Text(

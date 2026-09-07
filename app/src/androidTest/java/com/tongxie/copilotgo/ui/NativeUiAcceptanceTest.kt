@@ -518,6 +518,7 @@ class NativeUiAcceptanceTest {
     private data class ImeGeometry(
         val visible: Boolean,
         val bottomInset: Int,
+        val topSafeInset: Int,
         val windowBounds: AndroidRect,
         val windowOriginOnScreen: Offset
     ) {
@@ -534,6 +535,7 @@ class NativeUiAcceptanceTest {
         ImeGeometry(
             visible = insets.isVisible(WindowInsetsCompat.Type.ime()),
             bottomInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom,
+            topSafeInset = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()).top,
             windowBounds = AndroidRect(rule.activity.windowManager.currentWindowMetrics.bounds),
             windowOriginOnScreen = Offset(
                 (onScreen[0] - inWindow[0]).toFloat(),
@@ -586,6 +588,10 @@ class NativeUiAcceptanceTest {
                 input.right <= viewport.right + origin.x + 1f &&
                 input.top >= viewport.top + origin.y - 1f &&
                 input.bottom <= viewport.bottom + origin.y + 1f
+        )
+        assertTrue(
+            "The editor must stay below system bars and cutouts: input=$input, top inset=${ime.topSafeInset}",
+            input.top >= ime.windowBounds.top + ime.topSafeInset - 1f
         )
     }
 
