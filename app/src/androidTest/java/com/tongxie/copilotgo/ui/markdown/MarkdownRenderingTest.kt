@@ -32,7 +32,6 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.AnnotatedString
@@ -127,7 +126,7 @@ class MarkdownRenderingTest {
             val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
             assertTrue(directory.isDirectory || directory.mkdirs())
             saveNativeScreenshotEvidence(
-                rule.onRoot().captureToImage().asAndroidBitmap(), directory, "markdown-selection-menu"
+                rule.onNodeWithText(source).captureToImage().asAndroidBitmap(), directory, "markdown-selection-menu"
             )
             assertTrue("The real native Copy action must be clickable", nativeCopyAction(automation, copyLabel, click = true))
             var copied: String? = null
