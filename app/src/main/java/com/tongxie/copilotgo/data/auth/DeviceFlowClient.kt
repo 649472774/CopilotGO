@@ -2,9 +2,13 @@ package com.tongxie.copilotgo.data.auth
 
 import com.tongxie.copilotgo.data.Constants
 import com.tongxie.copilotgo.data.net.HttpClientProvider
+import com.tongxie.copilotgo.data.net.apiFailure
+import com.tongxie.copilotgo.data.net.readBodyLimited
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -15,10 +19,12 @@ class DeviceFlowClient(
     private val json: Json,
     private val clientId: String = Constants.CLIENT_ID,
     private val deviceCodeUrl: String = Constants.GITHUB_DEVICE_CODE_URL,
-    private val accessTokenUrl: String = Constants.GITHUB_ACCESS_TOKEN_URL
+    private val accessTokenUrl: String = Constants.GITHUB_ACCESS_TOKEN_URL,
+    private val pollDelay: suspend (Long) -> Unit = { delay(it) }
 ) {
 
     suspend fun requestDeviceCode(scope: String = "read:user"): DeviceCodeResponse {
+        httpProvider.awaitReady()
         val body = FormBody.Builder()
             .add("client_id", clientId)
             .add("scope", scope)
@@ -28,10 +34,14 @@ class DeviceFlowClient(
             .post(body)
             .header("Accept", "application/json")
             .build()
-        return httpProvider.client.newCall(req).executeAsync().use { resp ->
-            if (!resp.isSuccessful) error("device_code request failed: ${resp.code}")
-            val text = resp.body?.string().orEmpty()
-            json.decodeFromString(DeviceCodeResponse.serializer(), text)
+        return httpProvider.client.newCall(req).withResponse { resp ->
+            val text = resp.readBodyLimited(64 * 1024)
+            if (!resp.isSuccessful) throw apiFailure(resp.code, text, json)
+            json.decodeFromString(DeviceCodeResponse.serializer(), text).also {
+                require(it.deviceCode.isNotBlank() && it.userCode.isNotBlank() && it.expiresIn > 0) {
+                    "登录响应缺少有效的授权信息"
+                }
+            }
         }
     }
 
@@ -39,10 +49,11 @@ class DeviceFlowClient(
         val deadline = System.currentTimeMillis() + deviceCode.expiresIn * 1000L
         var interval = deviceCode.interval.coerceAtLeast(5)
         while (System.currentTimeMillis() < deadline) {
-            delay(interval * 1000L)
+            pollDelay(interval * 1000L)
+            if (System.currentTimeMillis() >= deadline) break
             val resp = pollOnce(deviceCode.deviceCode)
             when {
-                resp.accessToken != null -> {
+                !resp.accessToken.isNullOrBlank() -> {
                     emit(PollResult.Success(resp.accessToken))
                     return@flow
                 }
@@ -57,15 +68,20 @@ class DeviceFlowClient(
                     return@flow
                 }
                 resp.error != null -> {
-                    emit(PollResult.Failure(resp.errorDescription ?: resp.error))
+                    emit(PollResult.Failure("授权未完成，请重新开始登录"))
+                    return@flow
+                }
+                else -> {
+                    emit(PollResult.Failure("授权响应缺少状态，请重新开始登录"))
                     return@flow
                 }
             }
         }
         emit(PollResult.Failure("登录超时"))
-    }
+    }.flowOn(Dispatchers.IO)
 
     internal suspend fun pollOnce(deviceCode: String): AccessTokenResponse {
+        httpProvider.awaitReady()
         val body = FormBody.Builder()
             .add("client_id", clientId)
             .add("device_code", deviceCode)
@@ -76,8 +92,9 @@ class DeviceFlowClient(
             .post(body)
             .header("Accept", "application/json")
             .build()
-        return httpProvider.client.newCall(req).executeAsync().use { resp ->
-            val text = resp.body?.string().orEmpty()
+        return httpProvider.client.newCall(req).withResponse { resp ->
+            val text = resp.readBodyLimited(64 * 1024)
+            if (!resp.isSuccessful) throw apiFailure(resp.code, text, json)
             json.decodeFromString(AccessTokenResponse.serializer(), text)
         }
     }

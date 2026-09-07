@@ -33,15 +33,11 @@ object Constants {
     const val DESKTOP_USER_AGENT =
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-    const val DEFAULT_MODEL = "claude-sonnet-4.5"
+    // Empty means unselected. Only the account's runtime catalog can choose a model.
+    const val DEFAULT_MODEL = ""
+    val FALLBACK_MODELS: List<String> = emptyList()
 
-    // 注意：这些是"看起来稳定"的真实 model id。实际 picker 会动态从 /models 拉
-    // 取真实订阅可用列表覆盖。这里只是登录前/拉取失败时的兜底。
-    val FALLBACK_MODELS = listOf(
-        "claude-sonnet-4.5",
-        "claude-opus-4.6",
-        "gpt-4.1",
-        "gpt-5.2",
-        "gemini-2.5-pro"
-    )
+    const val MAX_RESPONSE_CHARACTERS = 1_000_000
+    const val MAX_PROMPT_CHARACTERS = 128_000
+    const val MAX_PROMPT_TURNS = 40
 }

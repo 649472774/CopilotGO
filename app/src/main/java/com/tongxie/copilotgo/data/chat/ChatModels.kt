@@ -71,7 +71,7 @@ data class DeltaContent(
 
 @Serializable
 data class ModelListResponse(
-    val data: List<ModelInfo> = emptyList()
+    val data: List<ModelInfo>
 )
 
 @Serializable
@@ -79,13 +79,70 @@ data class ModelInfo(
     val id: String,
     val name: String? = null,
     @SerialName("model_picker_enabled") val modelPickerEnabled: Boolean = true,
-    val capabilities: ModelCapabilities? = null
-)
+    val capabilities: ModelCapabilities? = null,
+    @SerialName("is_chat_default") val isChatDefault: Boolean = false,
+    @SerialName("supported_endpoints") val supportedEndpoints: List<String>? = null,
+    val policy: ModelPolicy? = null
+) {
+    val supportsVision: Boolean get() = capabilities?.supports?.vision == true
+    val supportsTools: Boolean get() = capabilities?.supports?.toolCalls == true
+    val chatCompatible: Boolean
+        get() = id.isNotBlank() && modelPickerEnabled &&
+            (capabilities?.type == null || capabilities.type == "chat") &&
+            (supportedEndpoints == null || "/chat/completions" in supportedEndpoints) &&
+            policy?.state != "disabled"
+}
 
 @Serializable
 data class ModelCapabilities(
     val family: String? = null,
-    val type: String? = null
+    val type: String? = null,
+    val supports: ModelSupports? = null,
+    val limits: ModelLimits? = null
+)
+
+@Serializable
+data class ModelSupports(
+    val vision: Boolean = false,
+    @SerialName("tool_calls") val toolCalls: Boolean = false,
+    @SerialName("parallel_tool_calls") val parallelToolCalls: Boolean = false
+)
+
+@Serializable
+data class ModelLimits(
+    @SerialName("max_prompt_tokens") val maxPromptTokens: Int? = null,
+    @SerialName("max_context_window_tokens") val maxContextWindowTokens: Int? = null,
+    @SerialName("max_output_tokens") val maxOutputTokens: Int? = null
+)
+
+@Serializable
+data class ModelPolicy(val state: String? = null)
+
+@Serializable
+enum class AttachmentKind { IMAGE, TEXT }
+
+@Serializable
+data class AttachmentRef(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val kind: AttachmentKind
+)
+
+@Serializable
+data class SessionSummary(
+    val id: String,
+    val title: String,
+    val model: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val pinned: Boolean,
+    val revision: Long,
+    val messageCount: Int,
+    val preview: String,
+    val hasImages: Boolean,
+    val loadError: String? = null
 )
 
 /** UI 用的会话消息（带本地 id 与时间）
@@ -98,7 +155,10 @@ data class UiMessage(
     val createdAt: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false,
     /** 可选图片附件（base64 data URI 或 http(s) URL），用于视觉模型 */
-    val imageUrls: List<String> = emptyList()
+    val imageUrls: List<String> = emptyList(),
+    val attachments: List<AttachmentRef> = emptyList(),
+    val finishReason: String? = null,
+    val submissionId: String? = null
 )
 
 /** UI 用的会话

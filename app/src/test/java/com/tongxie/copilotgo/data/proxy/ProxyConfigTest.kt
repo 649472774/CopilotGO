@@ -58,4 +58,12 @@ class ProxyConfigTest {
         assertTrue(cfg(port = 1).isValid())
         assertTrue(cfg(port = 65535).isValid())
     }
+
+    @Test
+    fun ipv6_is_supported_but_credentials_query_and_control_characters_are_not_hosts() {
+        assertTrue(cfg(host = "::1").isValid())
+        assertFalse(cfg(host = "user:value@proxy.example.com").isValid())
+        assertFalse(cfg(host = "proxy.example.com?query").isValid())
+        assertFalse(cfg(host = "proxy.example.com\u0000").isValid())
+    }
 }

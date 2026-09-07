@@ -11,12 +11,25 @@ android {
     defaultConfig {
         applicationId = "com.tongxie.copilotgo"
         minSdk = 31
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 34
         versionName = "0.1.33"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+    }
+
+    val signingStore = providers.environmentVariable("COPILOTGO_SIGNING_STORE_FILE").orNull
+    if (signingStore != null) {
+        signingConfigs.getByName("debug") {
+            storeFile = file(signingStore).also { require(it.isFile) { "Configured signing store does not exist" } }
+            storePassword = providers.environmentVariable("COPILOTGO_SIGNING_STORE_PASSWORD").orNull
+                ?: error("COPILOTGO_SIGNING_STORE_PASSWORD is required with a custom signing store")
+            keyAlias = providers.environmentVariable("COPILOTGO_SIGNING_KEY_ALIAS").orNull
+                ?: error("COPILOTGO_SIGNING_KEY_ALIAS is required with a custom signing store")
+            keyPassword = providers.environmentVariable("COPILOTGO_SIGNING_KEY_PASSWORD").orNull
+                ?: error("COPILOTGO_SIGNING_KEY_PASSWORD is required with a custom signing store")
+        }
     }
 
     buildTypes {
@@ -54,8 +67,8 @@ android {
         }
     }
     lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        abortOnError = true
+        checkReleaseBuilds = true
     }
 }
 
@@ -68,7 +81,9 @@ kotlin {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.savedstate)
     implementation(libs.androidx.activity.compose)
 
     implementation(platform(libs.androidx.compose.bom))
@@ -78,25 +93,20 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
     debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
 
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.swiperefreshlayout)
+    implementation(libs.androidx.webkit)
 
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
-    // 📐 LaTeX 公式渲染（ChatGPT-like 数学体验）
-    // 只使用 ext-latex 中独立的 JLatexMathDrawable 类（纯 Canvas/Drawable, 无 TextView/WebView/AppCompat 依赖）,
-    // 不创建 Markwon 实例 → 不会重蹈 v0.1.5 ANR 覆辙。Drawable 用 AndroidView+ImageView 显示。
+    // LatexView uses the bundled JLaTeXMath renderer, not a Markdown TextView.
     implementation("io.noties.markwon:ext-latex:4.6.2")
-
-    // ⚠️ 不再引入 dev.jeziellago:compose-markdown
-    // 该库内部用 AndroidView 包 Markwon TextView, 与 Material3 Theme 不兼容(必须 AppCompat),
-    // 在 LazyColumn recomposition 时反复 inflate, 主线程会卡 10s+ 触发 ANR.
-    // 已改用纯 Compose 实现的 SimpleMarkdownText (见 ui/components/SimpleMarkdownText.kt).
 
     testImplementation(libs.junit)
     testImplementation(libs.mockwebserver)
@@ -105,4 +115,6 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.ui.test.junit4)
 }
