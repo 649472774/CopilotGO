@@ -55,4 +55,11 @@ class MarkdownCitationsTest {
         assertEquals("[S999]", resolved[2].single().text)
         assertNull(resolved[2].single().destination)
     }
+
+    @Test fun escapedCitationBracketsStayLiteralWithoutDisablingOtherRealReferences() {
+        val parsed = MarkdownInlineParser.parse("\\[S1] and [S1\\] then [S1]")
+        val resolved = resolveMarkdownCitations(parsed.parts, sources).filterIsInstance<MarkdownInline.Text>()
+        assertEquals("[S1] and [S1] then [S1]", resolved.joinToString("") { it.text })
+        assertEquals(listOf(sources.getValue("S1")), resolved.mapNotNull { it.destination })
+    }
 }

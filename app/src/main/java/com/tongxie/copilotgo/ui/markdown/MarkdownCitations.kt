@@ -12,7 +12,9 @@ internal fun resolveMarkdownCitations(
 ): List<MarkdownInline> {
     if (sources.isEmpty()) return parts
     return parts.flatMap { part ->
-        if (part !is MarkdownInline.Text || part.destination != null || InlineFormat.Code in part.formats) {
+        if (part !is MarkdownInline.Text || !part.allowsCitations ||
+            part.destination != null || InlineFormat.Code in part.formats
+        ) {
             listOf(part)
         } else {
             buildList {

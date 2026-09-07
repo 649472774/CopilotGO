@@ -31,6 +31,9 @@ import com.tongxie.copilotgo.ui.screens.SettingsAccountScreen
 import com.tongxie.copilotgo.ui.screens.SettingsProxyScreen
 import com.tongxie.copilotgo.ui.screens.SettingsScreen
 import com.tongxie.copilotgo.ui.screens.SettingsStorageScreen
+import com.tongxie.copilotgo.ui.screens.ToolSettingsScreen
+import com.tongxie.copilotgo.ui.screens.SearchToolSettingsScreen
+import com.tongxie.copilotgo.ui.screens.McpServerSettingsScreen
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ChatViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ChatDraftsViewModel
@@ -39,6 +42,7 @@ import com.tongxie.copilotgo.ui.viewmodel.ProxyViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ProxyFormViewModel
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
 import com.tongxie.copilotgo.ui.viewmodel.UpdateViewModel
+import com.tongxie.copilotgo.ui.viewmodel.ToolSettingsViewModel
 import com.tongxie.copilotgo.ui.components.ScreenState
 
 object Routes {
@@ -50,10 +54,14 @@ object Routes {
     const val SETTINGS_PROXY = "settings/proxy"
     const val SETTINGS_STORAGE = "settings/storage"
     const val SETTINGS_ABOUT = "settings/about"
+    const val SETTINGS_TOOLS = "settings/tools"
+    const val SETTINGS_SEARCH_TOOL = "settings/tools/search"
+    const val SETTINGS_MCP_SERVER = "settings/tools/mcp/{serverId}"
     const val FILES = "files"
     const val REMOTE = "remote"
 
     fun chat(sessionId: String) = "chat/${android.net.Uri.encode(sessionId)}"
+    fun mcpServer(serverId: String?) = "settings/tools/mcp/${android.net.Uri.encode(serverId ?: "new")}"
 }
 
 @Composable
@@ -64,6 +72,7 @@ fun AppNavigation(container: AppContainer) {
     val authState by authVm.state.collectAsStateWithLifecycle()
     val initializing by authVm.initializing.collectAsStateWithLifecycle()
     val currentEntry by nav.currentBackStackEntryAsState()
+    val toolSettings by container.toolSettings.state.collectAsStateWithLifecycle()
 
     val listVm: SessionListViewModel = viewModel(
         factory = SimpleVMFactory {
@@ -183,6 +192,8 @@ fun AppNavigation(container: AppContainer) {
                     modelsVm = listVm,
                     draftsVm = draftsVm,
                     filesVm = filesVm,
+                    toolSettings = toolSettings,
+                    onOpenTools = { open(Routes.SETTINGS_TOOLS) },
                     onBack = ::back
                 )
             }
@@ -196,6 +207,7 @@ fun AppNavigation(container: AppContainer) {
                 onOpenProxy = { open(Routes.SETTINGS_PROXY) },
                 onOpenStorage = { open(Routes.SETTINGS_STORAGE) },
                 onOpenAbout = { open(Routes.SETTINGS_ABOUT) },
+                onOpenTools = { open(Routes.SETTINGS_TOOLS) },
                 onBack = ::back
             )
         }
@@ -230,6 +242,38 @@ fun AppNavigation(container: AppContainer) {
                 onBack = ::back
             )
         }
+        composable(Routes.SETTINGS_TOOLS) {
+            if (!canShowNativeContent(authState)) return@composable
+            ToolSettingsScreen(
+                viewModel = toolSettingsViewModel(container),
+                onOpenSearch = { open(Routes.SETTINGS_SEARCH_TOOL) },
+                onAddServer = { open(Routes.mcpServer(null)) },
+                onEditServer = { open(Routes.mcpServer(it)) },
+                onBack = ::back
+            )
+        }
+        composable(Routes.SETTINGS_SEARCH_TOOL) {
+            if (!canShowNativeContent(authState)) return@composable
+            SearchToolSettingsScreen(toolSettingsViewModel(container), onBack = ::back)
+        }
+        composable(Routes.SETTINGS_MCP_SERVER) { entry ->
+            if (!canShowNativeContent(authState)) return@composable
+            val serverId = entry.arguments?.getString("serverId")
+            if (serverId == "new" || serverId?.matches(Regex("[0-9a-f]{16}")) == true) {
+                McpServerSettingsScreen(
+                    toolSettingsViewModel(container),
+                    serverId = serverId.takeUnless { it == "new" },
+                    onBack = ::back
+                )
+            } else {
+                ScreenState(
+                    title = stringResource(R.string.agent_server_route_invalid),
+                    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+                    actionLabel = stringResource(R.string.action_back),
+                    onAction = ::back
+                )
+            }
+        }
         composable(Routes.FILES) {
             if (!canShowNativeContent(authState)) return@composable
             FilesScreen(
@@ -250,6 +294,11 @@ fun AppNavigation(container: AppContainer) {
         }
     }
 }
+
+@Composable
+private fun toolSettingsViewModel(container: AppContainer): ToolSettingsViewModel = viewModel(
+    factory = SimpleVMFactory { ToolSettingsViewModel(container.toolSettings, container.remoteMcp) }
+)
 
 class SimpleVMFactory<T : ViewModel>(private val creator: () -> T) : ViewModelProvider.Factory {
     override fun <U : ViewModel> create(modelClass: Class<U>): U = modelClass.cast(creator())

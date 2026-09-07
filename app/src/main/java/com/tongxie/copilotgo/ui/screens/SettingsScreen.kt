@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -58,7 +59,8 @@ fun SettingsScreen(
     onOpenProxy: () -> Unit,
     onOpenStorage: () -> Unit,
     onOpenAbout: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenTools: (() -> Unit)? = null
 ) {
     val authState by authVm.state.collectAsStateWithLifecycle()
     val authInitializing by authVm.initializing.collectAsStateWithLifecycle()
@@ -128,6 +130,14 @@ fun SettingsScreen(
         ) {
             SettingsMenuRow(Icons.Filled.AccountCircle, stringResource(R.string.settings_account_title), accountSummary, onOpenAccount)
             SettingsMenuRow(Icons.Filled.Settings, stringResource(R.string.settings_proxy_title), proxySummary, onOpenProxy)
+            if (onOpenTools != null) {
+                SettingsMenuRow(
+                    Icons.Filled.TravelExplore,
+                    stringResource(R.string.agent_tools_settings),
+                    stringResource(R.string.agent_tools_summary),
+                    onOpenTools
+                )
+            }
 
             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
             val loadedWifi = wifiAutoDownload
