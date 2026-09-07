@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
@@ -148,7 +149,8 @@ fun MessageBubble(
             }
         }
         Surface(
-            modifier = Modifier.widthIn(max = if (isUser) 640.dp else 760.dp),
+            modifier = Modifier.widthIn(max = if (isUser) 640.dp else 760.dp)
+                .testTag("agent-message-body-${message.id}"),
             shape = MaterialTheme.shapes.medium,
             color = if (isUser) MaterialTheme.colorScheme.secondaryContainer
             else MaterialTheme.colorScheme.surfaceContainerLow,
@@ -193,19 +195,20 @@ fun MessageBubble(
                     )
                 }
             }
-            message.agentRun?.takeIf { it.sources.isNotEmpty() }?.let { run ->
-                Column(
-                    Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(stringResource(R.string.agent_sources_title), style = MaterialTheme.typography.titleMedium)
-                    run.sources.take(4).forEach { source ->
-                        AgentSourceRow(source, onOpenAgentSource ?: openSource)
-                    }
-                    if (run.sources.size > 4 && onReviewAgent != null) {
-                        TextButton(onClick = { onReviewAgent(run) }) {
-                            Text(stringResource(R.string.agent_sources_more, run.sources.size))
-                        }
+        }
+        message.agentRun?.takeIf { it.sources.isNotEmpty() }?.let { run ->
+            Column(
+                Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(vertical = 8.dp)
+                    .testTag("agent-message-sources-${message.id}"),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(stringResource(R.string.agent_sources_title), style = MaterialTheme.typography.titleMedium)
+                run.sources.take(4).forEach { source ->
+                    AgentSourceRow(source, onOpenAgentSource ?: openSource)
+                }
+                if (run.sources.size > 4 && onReviewAgent != null) {
+                    TextButton(onClick = { onReviewAgent(run) }) {
+                        Text(stringResource(R.string.agent_sources_more, run.sources.size))
                     }
                 }
             }

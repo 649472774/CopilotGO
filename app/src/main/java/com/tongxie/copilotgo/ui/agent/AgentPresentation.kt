@@ -61,7 +61,6 @@ internal fun agentRunLabel(run: AgentRunRecord): Int = when (run.status) {
 @StringRes
 internal fun agentCallLabel(call: AgentToolCallRecord): Int {
     if (call.outcomeUnknown || call.result?.outcomeUnknown == true) return R.string.agent_outcome_unknown
-    if (call.result?.isError == true) return R.string.agent_call_failed
     return when (call.status) {
         AgentToolCallStatus.PROPOSED -> R.string.agent_call_proposed
         AgentToolCallStatus.AWAITING_APPROVAL -> R.string.agent_waiting_approval
@@ -70,7 +69,8 @@ internal fun agentCallLabel(call: AgentToolCallRecord): Int {
             AgentToolKind.PUBLIC_WEB_READ -> R.string.agent_reading
             AgentToolKind.MCP -> R.string.agent_calling_tool
         }
-        AgentToolCallStatus.SUCCEEDED -> R.string.agent_call_succeeded
+        AgentToolCallStatus.SUCCEEDED -> if (call.result?.isError == true) R.string.agent_call_failed
+        else R.string.agent_call_succeeded
         AgentToolCallStatus.FAILED -> R.string.agent_call_failed
         AgentToolCallStatus.DENIED -> R.string.agent_call_denied
         AgentToolCallStatus.INVALIDATED -> R.string.agent_call_invalidated
