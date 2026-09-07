@@ -5,7 +5,13 @@ import com.tongxie.copilotgo.data.chat.UiMessage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
-/** Sequential execution is deliberate: one external action and one approval at a time. */
+/**
+ * Defaults: 6 model rounds, 12 calls, 180 seconds overall, 30 seconds per tool,
+ * 60 seconds per approval, 16 KiB arguments, 32 KiB per result/128 KiB aggregate,
+ * 96 KiB complete wire context and 32 tools/32 KiB definitions.
+ * Sequential execution is deliberate: one external action and one approval at a time.
+ * The wire-byte context budget includes images; large images may require ordinary vision chat.
+ */
 @Serializable
 data class AgentLimits(
     val maxSteps: Int = 6,
@@ -145,4 +151,7 @@ interface AgentRunCallbacks {
 
 fun interface AgentRunner {
     suspend fun run(input: AgentRunInput, callbacks: AgentRunCallbacks): AgentRunRecord
+
+    /** Fail closed for adapters that cannot prove the proposal still targets the same tool. */
+    fun isApprovalCurrent(binding: AgentApprovalBinding): Boolean = false
 }

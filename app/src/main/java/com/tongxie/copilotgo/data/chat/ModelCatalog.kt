@@ -126,15 +126,19 @@ class ModelCatalog(
         }
     }
 
-    suspend fun requireModel(selectedId: String, needsVision: Boolean): ModelInfo {
+    suspend fun requireModel(selectedId: String, needsVision: Boolean, needsTools: Boolean = false): ModelInfo {
         refresh()
         val current = state.value
         if (current.isStale || current.updatedAt == null) {
             throw ModelUnavailableException(current.error ?: "请先刷新可用模型列表")
         }
         val model = if (selectedId.isBlank()) {
-            current.models.firstOrNull { it.isChatDefault && (!needsVision || it.supportsVision) }
-                ?: current.models.firstOrNull { !needsVision || it.supportsVision }
+            current.models.firstOrNull {
+                it.isChatDefault && it.chatCompatible &&
+                    (!needsVision || it.supportsVision) && (!needsTools || it.supportsTools)
+            } ?: current.models.firstOrNull {
+                it.chatCompatible && (!needsVision || it.supportsVision) && (!needsTools || it.supportsTools)
+            }
         } else {
             current.models.firstOrNull { it.id == selectedId }
         } ?: throw ModelUnavailableException(
@@ -143,6 +147,9 @@ class ModelCatalog(
         )
         if (needsVision && !model.supportsVision) {
             throw ModelUnavailableException("此会话包含图片，请选择支持视觉的模型后继续")
+        }
+        if (!model.chatCompatible || (needsTools && !model.supportsTools)) {
+            throw ModelUnavailableException("已选模型不支持 Agent 工具调用，请手动选择支持工具的聊天模型")
         }
         return model
     }
