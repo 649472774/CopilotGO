@@ -1,6 +1,8 @@
 package com.tongxie.copilotgo.data.chat
 
 import com.tongxie.copilotgo.data.Constants
+import com.tongxie.copilotgo.data.agent.AgentChatRequest
+import com.tongxie.copilotgo.data.agent.AgentStreamEvent
 import com.tongxie.copilotgo.data.auth.AuthRepository
 import com.tongxie.copilotgo.data.auth.withResponse
 import com.tongxie.copilotgo.data.net.HttpClientProvider
@@ -21,6 +23,7 @@ import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSource
 import java.io.File
 import java.util.UUID
 
@@ -33,20 +36,41 @@ class CopilotChatClient(
     val modelCatalog: ModelCatalog by lazy { ModelCatalog(this, json, auth, modelCacheFile) }
     val accountGeneration get() = auth.accountGeneration
 
+    internal suspend fun <T> withAccount(block: suspend () -> T): T = auth.withAccount(block)
+
     fun streamChat(request: ChatRequest): Flow<ChatDelta> =
         streamRaw { json.encodeToString(ChatRequest.serializer(), request) }
 
     fun streamVisionChat(request: VisionRequest): Flow<ChatDelta> =
         streamRaw { json.encodeToString(VisionRequest.serializer(), request) }
 
-    private fun streamRaw(body: () -> String): Flow<ChatDelta> = channelFlow<Result<ChatDelta>> {
+    fun streamAgentChat(request: AgentChatRequest): Flow<AgentStreamEvent> = streamResponse(
+        body = {
+            val encoded = AgentRequestEncoder.encode(request, json)
+            modelCatalog.requireModel(request.model, encoded.needsVision, needsTools = true)
+            encoded.body
+        }
+    ) { source, emit ->
+        val assembler = AgentStreamAssembler(json)
+        SseParser.events(source).takeWhile { event ->
+            assembler.accept(event).forEach { emit(it) }
+            !assembler.isDone
+        }.collect {}
+        emit(assembler.endOfStream())
+    }
+
+    private fun <T> streamResponse(
+        body: suspend () -> String,
+        consume: suspend (BufferedSource, suspend (T) -> Unit) -> Unit
+    ): Flow<T> = channelFlow<Result<T>> {
         try {
             auth.withAccount {
+                val encodedBody = body()
                 httpProvider.awaitReady()
                 val session = auth.getValidCopilotSession()
                 val request = Request.Builder()
                     .url("${session.apiBase.trimEnd('/')}/chat/completions")
-                    .post(body().toRequestBody(JSON_MEDIA))
+                    .post(encodedBody.toRequestBody(JSON_MEDIA))
                     .header("Authorization", "Bearer ${session.token}")
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
@@ -68,52 +92,7 @@ class CopilotChatClient(
                     if (response.body?.contentType()?.subtype != "event-stream") {
                         throw apiFailure(response.code, response.readBodyLimited(64 * 1024), json)
                     }
-                    var terminal = false
-                    var characters = 0
-                    SseParser.events(source).takeWhile { event ->
-                        if (event.event == "error") throw apiFailure(null, event.data, json)
-                        if (event.data == "[DONE]") {
-                            terminal = true
-                            send(Result.success(ChatDelta("", isFinal = true)))
-                            return@takeWhile false
-                        }
-                        if (event.data.isBlank() || event.event == "ping" || event.event == "heartbeat") {
-                            return@takeWhile true
-                        }
-                        val chunk = try {
-                            val root = json.parseToJsonElement(event.data) as? JsonObject
-                                ?: throw StreamProtocolException("流式响应格式不受支持")
-                            if (root["error"] != null && root["error"] != JsonNull) {
-                                throw apiFailure(null, event.data, json)
-                            }
-                            if ("choices" !in root && "usage" !in root) {
-                                throw StreamProtocolException("流式响应缺少消息内容")
-                            }
-                            json.decodeFromJsonElement(ChatStreamChunk.serializer(), root)
-                        } catch (_: SerializationException) {
-                            throw StreamProtocolException("流式响应格式损坏，请重试")
-                        }
-                        val choice = chunk.choices.firstOrNull { it.index == 0 }
-                        val delta = choice?.delta?.content.orEmpty()
-                        characters += delta.length
-                        if (characters > Constants.MAX_RESPONSE_CHARACTERS) {
-                            throw StreamProtocolException("回复超过本地安全长度限制，已停止接收")
-                        }
-                        if (delta.isNotEmpty()) send(Result.success(ChatDelta(delta, isFinal = false)))
-                        val finish = choice?.finishReason
-                        if (finish != null) {
-                            if (finish == "content_filter") {
-                                throw apiFailure(null, """{"code":"content_filter"}""", json)
-                            }
-                            if (finish == "tool_calls" || finish == "function_call") {
-                                throw StreamProtocolException("当前普通聊天模式不支持模型请求的工具调用")
-                            }
-                            terminal = true
-                            send(Result.success(ChatDelta("", isFinal = true, finishReason = finish)))
-                        }
-                        !terminal
-                    }.collect {}
-                    if (!terminal) throw StreamProtocolException("回复在完成前中断，请重试")
+                    consume(source) { send(Result.success(it)) }
                 }
             }
         } catch (e: CancellationException) {
@@ -123,6 +102,55 @@ class CopilotChatClient(
             send(Result.failure(e))
         }
     }.flowOn(Dispatchers.IO).map { it.getOrThrow() }
+
+    private fun streamRaw(body: () -> String): Flow<ChatDelta> = streamResponse({ body() }) { source, emit ->
+        var terminal = false
+        var characters = 0
+        SseParser.events(source).takeWhile { event ->
+            if (event.event == "error") throw apiFailure(null, event.data, json)
+            if (event.data == "[DONE]") {
+                terminal = true
+                emit(ChatDelta("", isFinal = true))
+                return@takeWhile false
+            }
+            if (event.data.isBlank() || event.event == "ping" || event.event == "heartbeat") {
+                return@takeWhile true
+            }
+            val chunk = try {
+                val root = json.parseToJsonElement(event.data) as? JsonObject
+                    ?: throw StreamProtocolException("流式响应格式不受支持")
+                if (root["error"] != null && root["error"] != JsonNull) {
+                    throw apiFailure(null, event.data, json)
+                }
+                if ("choices" !in root && "usage" !in root) {
+                    throw StreamProtocolException("流式响应缺少消息内容")
+                }
+                json.decodeFromJsonElement(ChatStreamChunk.serializer(), root)
+            } catch (_: SerializationException) {
+                throw StreamProtocolException("流式响应格式损坏，请重试")
+            }
+            val choice = chunk.choices.firstOrNull { it.index == 0 }
+            val delta = choice?.delta?.content.orEmpty()
+            characters += delta.length
+            if (characters > Constants.MAX_RESPONSE_CHARACTERS) {
+                throw StreamProtocolException("回复超过本地安全长度限制，已停止接收")
+            }
+            if (delta.isNotEmpty()) emit(ChatDelta(delta, isFinal = false))
+            val finish = choice?.finishReason
+            if (finish != null) {
+                if (finish == "content_filter") {
+                    throw apiFailure(null, """{"code":"content_filter"}""", json)
+                }
+                if (finish == "tool_calls" || finish == "function_call") {
+                    throw StreamProtocolException("当前普通聊天模式不支持模型请求的工具调用")
+                }
+                terminal = true
+                emit(ChatDelta("", isFinal = true, finishReason = finish))
+            }
+            !terminal
+        }.collect {}
+        if (!terminal) throw StreamProtocolException("回复在完成前中断，请重试")
+    }
 
     suspend fun listModels(): List<ModelInfo> = withContext(Dispatchers.IO) {
         auth.withAccount {
