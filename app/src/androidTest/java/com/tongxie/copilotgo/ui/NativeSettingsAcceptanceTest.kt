@@ -165,15 +165,17 @@ class NativeSettingsAcceptanceTest {
         Espresso.closeSoftKeyboard()
         rule.onNodeWithContentDescription(text(R.string.action_back)).performClick()
         rule.onNodeWithText(text(R.string.settings_proxy_continue_editing))
-            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+            .performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         rule.runOnIdle {
             assertEquals(0, back.get())
             assertEquals("wrong", fixture.formVm.state.value.draft?.portText)
         }
         rule.onNodeWithContentDescription(text(R.string.action_back)).performClick()
         saveScreenshot("proxy-unsaved-dialog-200", dialog = true)
-        rule.onNodeWithText(text(R.string.settings_proxy_discard))
-            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        val discard = rule.onNodeWithText(text(R.string.settings_proxy_discard))
+        discard.performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        saveScreenshot("proxy-unsaved-dialog-actions-200", dialog = true)
+        discard.performClick()
         rule.waitUntil(5_000) { back.get() == 1 }
         rule.runOnIdle {
             assertEquals(1, back.get())
