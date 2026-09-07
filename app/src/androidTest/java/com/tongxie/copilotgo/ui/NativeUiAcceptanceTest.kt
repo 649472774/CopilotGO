@@ -102,10 +102,7 @@ class NativeUiAcceptanceTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     @Before fun edgeToEdge() {
-        rule.activity.runOnUiThread {
-            rule.activity.enableEdgeToEdge()
-            rule.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        }
+        configureHostWindow()
     }
 
     @Test fun composerKeepsWideEditorAnd48DpTargetsAt200Percent() {
@@ -263,16 +260,31 @@ class NativeUiAcceptanceTest {
                 }
             }
         }
+        configureHostWindow()
+        rule.waitForIdle()
+        assertResizeHost()
         rule.onNodeWithTag(ChatTags.INPUT).performClick().performTextInput("测试输入 \uD83D\uDE80")
         waitForRootIme(visible = true)
         rule.waitForIdle()
         saveScreenshot("chat-ime-cjk")
+        assertResizeHost()
         rule.onNodeWithTag(ChatTags.INPUT).assertIsDisplayed()
         rule.onNodeWithTag(ChatTags.SEND).assertIsDisplayed().assertIsEnabled()
         val ime = requireNotNull(rootImeGeometry())
         assertTrue("Physical IME must be open for the bounds assertions", ime.visible && ime.bottomInset > 0)
         assertControlAboveIme(ChatTags.INPUT, ime)
         assertControlAboveIme(ChatTags.SEND, ime)
+        val sendBounds = controlBoundsOnScreen(ChatTags.SEND, ime)
+        val allowedGap = rule.activity.resources.displayMetrics.density * 24f
+        assertTrue(
+            "Composer must sit next to the real IME, not above a second inset: send=$sendBounds, IME top=${ime.topOnScreen}",
+            ime.topOnScreen - sendBounds.bottom <= allowedGap
+        )
+        if (ime.windowBounds.height() > ime.windowBounds.width()) {
+            rule.onNodeWithText(session.value.title).assertIsDisplayed()
+            rule.onNodeWithContentDescription(rule.activity.getString(com.tongxie.copilotgo.R.string.action_back))
+                .assertIsDisplayed()
+        }
         rule.runOnIdle { assertEquals("测试输入 \uD83D\uDE80", text.value) }
 
         Espresso.pressBack()
@@ -470,10 +482,29 @@ class NativeUiAcceptanceTest {
     private fun scrollPosition(): Float = rule.onNodeWithTag(ChatTags.MESSAGES)
         .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
 
+    private fun configureHostWindow() {
+        rule.activityRule.scenario.onActivity { activity ->
+            activity.enableEdgeToEdge()
+            activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
+    }
+
+    private fun assertResizeHost() {
+        rule.runOnUiThread {
+            assertEquals(
+                "The fixture must mirror MainActivity's native RESIZE policy, not platform PAN",
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+                rule.activity.window.attributes.softInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST
+            )
+        }
+    }
+
     private fun saveScreenshot(name: String) {
         val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
         assertTrue(directory.isDirectory || directory.mkdirs())
-        saveNativeScreenshotEvidence(rule.onRoot().captureToImage().asAndroidBitmap(), directory, name)
+        saveNativeScreenshotEvidence(rule.activity, directory, name) {
+            rule.onRoot().captureToImage().asAndroidBitmap()
+        }
     }
 
     private data class ImeGeometry(
@@ -523,14 +554,7 @@ class NativeUiAcceptanceTest {
     }
 
     private fun assertControlAboveIme(tag: String, ime: ImeGeometry) {
-        val node = rule.onNodeWithTag(tag).fetchSemanticsNode()
-        // Use the full measured control, not its clipped visible rectangle.
-        val origin = node.positionInWindow + ime.windowOriginOnScreen
-        val bounds = Rect(
-            origin.x, origin.y,
-            origin.x + node.size.width,
-            origin.y + node.size.height
-        )
+        val bounds = controlBoundsOnScreen(tag, ime)
         assertTrue("$tag must have non-empty bounds: $bounds", bounds.width > 0 && bounds.height > 0)
         assertTrue(
             "$tag extends under the physical IME: bounds=$bounds, IME top=${ime.topOnScreen}, window=${ime.windowBounds}",
@@ -541,6 +565,17 @@ class NativeUiAcceptanceTest {
             bounds.left >= ime.windowBounds.left - 1f &&
                 bounds.right <= ime.windowBounds.right + 1f &&
                 bounds.top >= ime.windowBounds.top - 1f
+        )
+    }
+
+    private fun controlBoundsOnScreen(tag: String, ime: ImeGeometry): Rect {
+        val node = rule.onNodeWithTag(tag).fetchSemanticsNode()
+        // Use the full measured control, not its clipped visible rectangle.
+        val origin = node.positionInWindow + ime.windowOriginOnScreen
+        return Rect(
+            origin.x, origin.y,
+            origin.x + node.size.width,
+            origin.y + node.size.height
         )
     }
 

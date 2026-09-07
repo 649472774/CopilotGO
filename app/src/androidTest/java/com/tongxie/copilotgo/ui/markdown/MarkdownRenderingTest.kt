@@ -125,9 +125,9 @@ class MarkdownRenderingTest {
             rule.waitUntil(5_000) { nativeCopyAction(automation, copyLabel, click = false) }
             val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
             assertTrue(directory.isDirectory || directory.mkdirs())
-            saveNativeScreenshotEvidence(
-                rule.onNodeWithText(source).captureToImage().asAndroidBitmap(), directory, "markdown-selection-menu"
-            )
+            saveNativeScreenshotEvidence(rule.activity, directory, "markdown-selection-menu") {
+                rule.onNodeWithText(source).captureToImage().asAndroidBitmap()
+            }
             assertTrue("The real native Copy action must be clickable", nativeCopyAction(automation, copyLabel, click = true))
             var copied: String? = null
             rule.waitUntil(5_000) {
