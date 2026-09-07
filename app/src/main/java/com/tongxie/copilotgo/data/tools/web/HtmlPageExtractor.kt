@@ -34,7 +34,7 @@ internal object HtmlPageExtractor {
             if (text.any { it == '\u0000' }) toolFailure(ToolProblemCode.UNSUPPORTED_CONTENT, "网页返回了二进制内容而非纯文本")
             val clipped = boundToolText(text.trim(), MAX_TEXT_BYTES)
             if (clipped.text.isBlank()) toolFailure(ToolProblemCode.UNSUPPORTED_CONTENT, "网页没有可读取的文本")
-            return ExtractedPage(sourceUrl, clipped.text, clipped.truncated)
+            return ExtractedPage(sourceUrl.take(240), clipped.text, clipped.truncated)
         }
         if (bytes.count { it == '<'.code.toByte() } > MAX_MARKUP_TOKENS) {
             toolFailure(ToolProblemCode.TOO_LARGE, "网页结构过于复杂，已停止解析")

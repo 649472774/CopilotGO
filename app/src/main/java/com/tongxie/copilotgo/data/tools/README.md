@@ -59,6 +59,11 @@ are forbidden. Compressed and decoded response bodies, framing, redirects, and
 request duration have independent limits. Normal certificate verification remains
 enabled.
 
+A per-request dispatch marker distinguishes a pre-connection rejection from a
+redirect or route-policy failure after an MCP request may have reached the server.
+The latter preserves an unknown outcome and cannot be reported as an unexecuted
+request. No rejected request is automatically replayed.
+
 A route whose remote DNS cannot be safely constrained fails with a visible proxy
 policy error instead of claiming protection from a preflight lookup. An explicitly
 configured LAN HTTPS MCP server is a separate, per-server trust choice; it never
@@ -93,6 +98,13 @@ profile produce visible rejected-tool rows. Schema, reference/composition work,
 and instance limits apply in addition to the library's validation. CPU-bound
 regular expressions are not made safe merely by a coroutine timeout.
 
+The current schema profile caps schema JSON at 32 KiB/256 nodes, and arguments
+and structured results at 32 KiB/2,048 nodes. Depth is limited to 16; expanded
+reference work to 512; arrays to 256 items; objects to 128 properties; numeric
+precision to 64 digits and exponents to magnitude 128. Regex, format/content
+decoding, scoped/dynamic references, and unsupported required vocabularies are
+rejected with a visible reason.
+
 `x-mcp-header` definitions must be primitive, unique, and statically reachable
 through `properties`. Header values use the required UTF-8 Base64 sentinel encoding
 when needed, including literal sentinel collisions and exact safe-integer checks.
@@ -116,6 +128,11 @@ UI discovery uses `discover(serverId, expectedRevision)` or
 selected tools changes the revision and requires current discovery before exposure.
 The executor's snapshot is side-effect-free and returns availability issues rather
 than inventing tools or successful connection state.
+
+Model exposure is limited to 32 tools and 128 KiB of input schemas. The complete
+serialized result, including escaped text and source metadata, is bounded to
+24 KiB so the runtime can assign source/call IDs inside its 32 KiB envelope.
+Truncation is explicit; source URLs are never shortened into invented links.
 
 ## Verification entry points
 

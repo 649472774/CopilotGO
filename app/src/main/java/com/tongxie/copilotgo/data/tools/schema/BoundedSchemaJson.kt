@@ -1,7 +1,8 @@
 package com.tongxie.copilotgo.data.tools.schema
 
+import com.tongxie.copilotgo.data.tools.ToolException
+import com.tongxie.copilotgo.data.tools.ToolProblem
 import com.tongxie.copilotgo.data.tools.ToolProblemCode
-import com.tongxie.copilotgo.data.tools.toolFailure
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -148,11 +149,14 @@ internal object BoundedSchemaJson {
     }
 
     private fun unsafeNumber(): Nothing =
-        toolFailure(ToolProblemCode.SCHEMA, "Schema 或工具数据中的数字精度、长度或指数超出安全范围")
+        schemaFailure(ToolProblemCode.SCHEMA, "Schema 或工具数据中的数字精度、长度或指数超出安全范围")
 
     private fun invalidJson(): Nothing =
-        toolFailure(ToolProblemCode.SCHEMA, "Schema 或工具数据包含无效的 JSON 字面量或 Unicode")
+        schemaFailure(ToolProblemCode.SCHEMA, "Schema 或工具数据包含无效的 JSON 字面量或 Unicode")
 
     private fun tooLarge(): Nothing =
-        toolFailure(ToolProblemCode.TOO_LARGE, "Schema 或工具数据的大小、嵌套或节点数量超过安全限制")
+        schemaFailure(ToolProblemCode.TOO_LARGE, "Schema 或工具数据的大小、嵌套或节点数量超过安全限制")
 }
+
+internal fun schemaFailure(code: ToolProblemCode, message: String): Nothing =
+    throw ToolException(ToolProblem(code, message))

@@ -6,17 +6,20 @@ import com.fasterxml.jackson.databind.node.DecimalNode
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import com.fasterxml.jackson.databind.node.ValueNode
 import com.networknt.schema.InputFormat
+import com.networknt.schema.FailFastAssertionException
 import com.networknt.schema.OutputFormat
 import com.networknt.schema.Schema
+import com.networknt.schema.SchemaException
 import com.networknt.schema.SchemaLocation
 import com.networknt.schema.SchemaRegistry
 import com.tongxie.copilotgo.data.tools.ToolException
 import com.tongxie.copilotgo.data.tools.ToolProblemCode
-import com.tongxie.copilotgo.data.tools.toolFailure
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.math.BigDecimal
 import java.math.BigInteger
+import java.io.IOException
+import java.net.URISyntaxException
 import java.util.concurrent.CancellationException
 
 internal object ToolSchemaCompiler {
@@ -30,7 +33,7 @@ internal object ToolSchemaCompiler {
         // getSchema() constructs validators; it does not validate keyword values against the metaschema.
         // Checking every subschema also covers the explicitly supported Draft-07 $defs extension.
         preflight.subschemas.forEach {
-            if (!metaSchema.validate(it.toString(), InputFormat.JSON, OutputFormat.BOOLEAN)) {
+            if (metaSchema.validate(it.toString(), InputFormat.JSON).isNotEmpty()) {
                 invalidToolSchema()
             }
         }
@@ -39,7 +42,8 @@ internal object ToolSchemaCompiler {
             builder.schemaCacheEnabled(false)
             builder.schemaLoader { it.fetchRemoteResources(false).block { true } }
         }
-        ValidatedToolSchema(definition, registry.getSchema(preflight.normalized.toString()))
+        val evaluator = registry.getSchema(preflight.normalized.toString()).also { it.initializeValidators() }
+        ValidatedToolSchema(definition, evaluator)
     }
 }
 
@@ -55,7 +59,7 @@ internal class ValidatedToolSchema internal constructor(
         schemaBoundary("无法安全校验工具数据，已拒绝本次调用或结果") {
             val text = BoundedSchemaJson.instance(value)
             if (!evaluator.validate(text, InputFormat.JSON, OutputFormat.BOOLEAN)) {
-                toolFailure(ToolProblemCode.SCHEMA, "工具参数或结构化结果不符合 Schema 约束")
+                schemaFailure(ToolProblemCode.SCHEMA, "工具参数或结构化结果不符合 Schema 约束")
             }
         }
     }
@@ -93,11 +97,14 @@ private object TrustedToolMetaSchemas {
                 loader.fetchRemoteResources(false).allow { it.toString() in allowed }
             }
         }
-        return registry.getSchema(SchemaLocation.of(dialect.uri))
+        // Automatic preloading can suppress failures. Explicit initialization must succeed before use.
+        return registry.getSchema(SchemaLocation.of(dialect.version.dialectId))
+            .also { it.initializeValidators() }
     }
 }
 
 private object ToolSchemaJsonMapper {
+    // Only JSON numeric decoding is customized; neither registry installs a custom URI mapper or loader.
     val mapper: JsonMapper = JsonMapper.builder()
         .enable(DeserializationFeature.USE_BIG_INTEGER_FOR_INTS)
         .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
@@ -118,8 +125,16 @@ private inline fun <T> schemaBoundary(message: String, action: () -> T): T = try
     throw cancelled
 } catch (safe: ToolException) {
     throw safe
-} catch (_: Exception) {
-    // Validator diagnostics can contain schema constants, argument values or credentials.
-    // Do not retain the exception, its message, or any cause/suppressed chain.
-    toolFailure(ToolProblemCode.SCHEMA, message)
+} catch (_: SchemaException) {
+    schemaFailure(ToolProblemCode.SCHEMA, message)
+} catch (_: FailFastAssertionException) {
+    schemaFailure(ToolProblemCode.SCHEMA, message)
+} catch (_: IOException) {
+    schemaFailure(ToolProblemCode.SCHEMA, message)
+} catch (_: IllegalArgumentException) {
+    schemaFailure(ToolProblemCode.SCHEMA, message)
+} catch (_: ArithmeticException) {
+    schemaFailure(ToolProblemCode.SCHEMA, message)
+} catch (_: URISyntaxException) {
+    schemaFailure(ToolProblemCode.SCHEMA, message)
 }

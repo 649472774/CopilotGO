@@ -48,25 +48,34 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
         hasCredentials: Boolean = false,
         assertCurrent: () -> Unit = {},
         block: suspend (ToolHttpResponse) -> T
-    ): T = withContext(Dispatchers.IO) {
-        try {
-            withTimeout(limits.callTimeoutMillis) {
-                exchange(request, policy, limits, allowRedirects, hasCredentials, assertCurrent, block)
+    ): T {
+        val requestSent = AtomicBoolean(false)
+        return try {
+            withContext(Dispatchers.IO) {
+                try {
+                    withTimeout(limits.callTimeoutMillis) {
+                        exchange(request, policy, limits, allowRedirects, hasCredentials, assertCurrent, requestSent, block)
+                    }
+                } catch (e: CallerFailure) {
+                    throw e
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    // Preserve dispatch uncertainty while removing raw causes/suppressed transport errors.
+                    throw ToolNetworkException(
+                        when (e) {
+                            is ToolNetworkException -> e.code
+                            is ProtocolException -> ToolNetworkErrorCode.INVALID_RESPONSE
+                            else -> ToolNetworkErrorCode.NETWORK_ERROR
+                        },
+                        requestSent.get() || (e as? ToolNetworkException)?.requestMayHaveBeenSent == true
+                    )
+                }
             }
         } catch (e: CallerFailure) {
+            // Unwrap on the caller's dispatcher, after coroutine stack-trace recovery boundaries.
             throw e.original
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            currentCoroutineContext().ensureActive()
-            // Recreate even our own exceptions: use/close may have attached a raw suppressed error.
-            throw ToolNetworkException(
-                when (e) {
-                    is ToolNetworkException -> e.code
-                    is ProtocolException -> ToolNetworkErrorCode.INVALID_RESPONSE
-                    else -> ToolNetworkErrorCode.NETWORK_ERROR
-                }
-            )
         }
     }
 
@@ -77,6 +86,7 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
         allowRedirects: Boolean,
         hasCredentials: Boolean,
         assertCurrent: () -> Unit,
+        requestSent: AtomicBoolean,
         block: suspend (ToolHttpResponse) -> T
     ): T {
         val context = currentCoroutineContext()
@@ -91,7 +101,7 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
             provider.awaitReady()
             callerCheck(assertCurrent)
             val base = provider.client
-            val result = hop(next, base, policy, limits, deadline, assertCurrent) { response, headers, cancel ->
+            val result = hop(next, base, policy, limits, deadline, assertCurrent, requestSent) { response, headers, cancel ->
                 if (response.code in 300..399 && response.code != 304) {
                     HopResult.Redirect(
                         redirectRequest(next, response.code, headers, policy, limits, redirects, allowRedirects, hasCredentials)
@@ -154,6 +164,7 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
         limits: ToolNetworkLimits,
         deadline: Long,
         assertCurrent: () -> Unit,
+        requestSent: AtomicBoolean,
         block: suspend (okhttp3.Response, Headers, () -> Unit) -> T
     ): T {
         if (base.proxy != null && base.proxy!!.type() != Proxy.Type.DIRECT) {
@@ -201,6 +212,7 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
                         chain.connection() ?: networkFailure(ToolNetworkErrorCode.UNSAFE_DNS)
                     )
                     if (!exchanged.compareAndSet(false, true)) networkFailure(ToolNetworkErrorCode.NETWORK_ERROR)
+                    requestSent.set(true)
                     val response = chain.proceed(chain.request())
                     wireHeaders.set(response.headers)
                     // OkHttp can retry 503 + Retry-After: 0 even when retryOnConnectionFailure is

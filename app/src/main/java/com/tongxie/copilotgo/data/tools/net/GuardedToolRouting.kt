@@ -78,10 +78,6 @@ internal class ToolConnectionListener(private val dns: GuardedToolDns, private v
         dns.assertAddress(inetSocketAddress.address)
     }
 
-    override fun connectionAcquired(call: Call, connection: Connection) {
-        assertConnection(connection)
-    }
-
     fun assertConnection(connection: Connection) {
         if (connection.route().proxy.type() != Proxy.Type.DIRECT) {
             networkFailure(ToolNetworkErrorCode.UNSAFE_PROXY_ROUTE)

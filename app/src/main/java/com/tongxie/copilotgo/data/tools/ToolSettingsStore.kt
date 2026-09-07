@@ -395,6 +395,9 @@ class ToolSettingsStore(
         ) {
             toolFailure(ToolProblemCode.INVALID_CONFIGURATION, "请将密钥保存在认证字段，不要放入服务器网址")
         }
+        if (url.toString().length > ToolSettingsLimits.MAX_ENDPOINT_CHARS) {
+            toolFailure(ToolProblemCode.INVALID_CONFIGURATION, "编码后的服务器地址超过 2048 字符，请缩短地址")
+        }
         normalizedAuthHeader(draft.authMode, draft.authHeaderName)
         return url.toString()
     }
