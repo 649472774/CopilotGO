@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <exclude domain="sharedpref" path="device.preferences_pb" />
-    <exclude domain="sharedpref" path="copilot_token.preferences_pb" />
+    <!-- Preferences DataStore lives in files/datastore, not shared_prefs. -->
+    <exclude domain="file" path="datastore/" />
+    <exclude domain="file" path="credentials/" />
+    <exclude domain="sharedpref" path="." />
+    <!-- WebView cookies and login state must not migrate with conversations. -->
+    <exclude domain="root" path="app_webview/" />
+    <exclude domain="device_file" path="datastore/" />
+    <exclude domain="device_file" path="credentials/" />
+    <exclude domain="device_sharedpref" path="." />
+    <exclude domain="external" path="update/" />
 </full-backup-content>
