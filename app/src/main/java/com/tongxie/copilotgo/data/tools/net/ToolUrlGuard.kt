@@ -21,7 +21,9 @@ object ToolUrlGuard {
         // Check before HttpUrl can normalize empty userinfo or percent-encoded hosts away.
         if (authority.isEmpty() || '@' in authority || '%' in authority) unsafeUrl()
         val url = value.toHttpUrlOrNull() ?: unsafeUrl()
-        if (!url.isHttps || url.username.isNotEmpty() || url.password.isNotEmpty() || url.fragment != null) {
+        if (!url.isHttps || url.username.isNotEmpty() || url.password.isNotEmpty() || url.fragment != null ||
+            url.toString().length > MAX_URL_CHARS
+        ) {
             unsafeUrl()
         }
         validateHost(url.host, policy)

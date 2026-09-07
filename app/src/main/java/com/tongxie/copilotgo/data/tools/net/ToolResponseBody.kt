@@ -29,7 +29,12 @@ internal class BoundedToolSource(
         val remaining = maxBytes - received
         if (remaining == 0L) {
             val probe = Buffer()
-            if (super.read(probe, 1) != -1L) networkFailure(ToolNetworkErrorCode.RESPONSE_TOO_LARGE)
+            if (super.read(probe, 1) != -1L) {
+                networkFailure(
+                    if (expectedBytes == received) ToolNetworkErrorCode.INVALID_RESPONSE
+                    else ToolNetworkErrorCode.RESPONSE_TOO_LARGE
+                )
+            }
             checkComplete()
             return -1
         }
@@ -62,7 +67,7 @@ internal class ToolResponseBody(
         ) networkFailure(ToolNetworkErrorCode.RESPONSE_TOO_LARGE)
         val body = response.body ?: networkFailure(ToolNetworkErrorCode.INVALID_RESPONSE)
         val compressed = BoundedToolSource(
-            body.source(), limits.maxCompressedBytes, if (noBody) 0 else length
+            body.source(), if (noBody) 0 else limits.maxCompressedBytes, if (noBody) 0 else length
         )
         val gzip = !noBody && encoding == "gzip"
         val decoded: Source = if (gzip) GzipSource(compressed.buffer()) else compressed

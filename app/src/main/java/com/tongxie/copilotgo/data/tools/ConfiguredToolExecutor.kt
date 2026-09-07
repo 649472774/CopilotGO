@@ -100,7 +100,9 @@ class ConfiguredToolExecutor(
                 server.enabledTools.filter { selected -> catalog.tools.none { it.name == selected } }.forEach {
                     issues += AgentToolAvailabilityIssue(server.id, "所选 MCP 工具目前不可用或其 Schema 已被拒绝")
                 }
-                if (server.enabledTools.isEmpty()) {
+                if (catalog.tools.isEmpty()) {
+                    issues += AgentToolAvailabilityIssue(server.id, "服务没有可用的 MCP 工具，请查看发现结果或服务器能力")
+                } else if (server.enabledTools.isEmpty()) {
                     issues += AgentToolAvailabilityIssue(server.id, "已发现 MCP 工具；请在设置中选择要向模型提供的工具")
                 }
             }

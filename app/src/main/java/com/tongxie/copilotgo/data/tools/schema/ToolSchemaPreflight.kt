@@ -2,7 +2,6 @@ package com.tongxie.copilotgo.data.tools.schema
 
 import com.networknt.schema.SpecificationVersion
 import com.tongxie.copilotgo.data.tools.ToolProblemCode
-import com.tongxie.copilotgo.data.tools.toolFailure
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -21,7 +20,7 @@ internal enum class ToolSchemaDialect(val uri: String, val version: Specificatio
             val uri = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
                 ?: invalidToolSchema()
             return entries.firstOrNull { uri == it.uri || uri == "${it.uri}#" }
-                ?: toolFailure(ToolProblemCode.SCHEMA, "工具 Schema 声明了尚未支持的 JSON Schema 版本")
+                ?: schemaFailure(ToolProblemCode.SCHEMA, "工具 Schema 声明了尚未支持的 JSON Schema 版本")
         }
     }
 }
@@ -68,18 +67,18 @@ internal class ToolSchemaPreflight(private val definition: JsonObject) {
         schema.forEach { (keyword, child) ->
             when {
                 keyword in UNSAFE_KEYWORDS ->
-                    toolFailure(ToolProblemCode.SCHEMA, "暂不支持 Schema 正则、格式或内容解码约束，已拒绝以免忽略约束")
+                    schemaFailure(ToolProblemCode.SCHEMA, "暂不支持 Schema 正则、格式或内容解码约束，已拒绝以免忽略约束")
                 keyword in SCOPED_REFERENCE_KEYWORDS ->
-                    toolFailure(ToolProblemCode.SCHEMA, "暂不支持 Schema 标识作用域、锚点、动态引用或递归引用")
+                    schemaFailure(ToolProblemCode.SCHEMA, "暂不支持 Schema 标识作用域、锚点、动态引用或递归引用")
                 keyword !in allowedKeywords ->
-                    toolFailure(ToolProblemCode.SCHEMA, "Schema 含有当前规范下不支持的关键字，已拒绝以免忽略约束")
+                    schemaFailure(ToolProblemCode.SCHEMA, "Schema 含有当前规范下不支持的关键字，已拒绝以免忽略约束")
             }
             if (keyword in COUNT_KEYWORDS) checkCount(child)
             val childPath = "$path/${escape(keyword)}"
             fields[keyword] = when (keyword) {
                 "\$schema" -> {
                     if (ToolSchemaDialect.of(child) != dialect) {
-                        toolFailure(ToolProblemCode.SCHEMA, "暂不支持在子 Schema 中切换 JSON Schema 版本")
+                        schemaFailure(ToolProblemCode.SCHEMA, "暂不支持在子 Schema 中切换 JSON Schema 版本")
                     }
                     JsonPrimitive(dialect.uri)
                 }
@@ -128,7 +127,7 @@ internal class ToolSchemaPreflight(private val definition: JsonObject) {
         if (dialect == ToolSchemaDialect.DRAFT_07 && node.reference != null &&
             schema.keys.any { it !in DRAFT_07_REFERENCE_SIBLINGS }
         ) {
-            toolFailure(ToolProblemCode.SCHEMA, "Draft-07 引用旁的约束会被规范忽略，请改用 allOf 组合")
+            schemaFailure(ToolProblemCode.SCHEMA, "Draft-07 引用旁的约束会被规范忽略，请改用 allOf 组合")
         }
         node.normalized = JsonObject(fields)
         return node.normalized
@@ -151,7 +150,7 @@ internal class ToolSchemaPreflight(private val definition: JsonObject) {
             val required = (flag as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
                 ?: invalidToolSchema()
             if (required && name !in SUPPORTED_VOCABULARIES) {
-                toolFailure(ToolProblemCode.SCHEMA, "Schema 要求当前尚未支持的词汇表，已拒绝以免忽略约束")
+                schemaFailure(ToolProblemCode.SCHEMA, "Schema 要求当前尚未支持的词汇表，已拒绝以免忽略约束")
             }
         }
     }
@@ -163,7 +162,7 @@ internal class ToolSchemaPreflight(private val definition: JsonObject) {
             // The evaluator stores cardinalities in Ints; never allow a valid large integer to wrap.
             val count = BigDecimal(value.content)
             if (count > MAX_COUNT || count < MIN_COUNT) {
-                toolFailure(ToolProblemCode.SCHEMA, "Schema 的长度或数量约束超出安全整数范围")
+                schemaFailure(ToolProblemCode.SCHEMA, "Schema 的长度或数量约束超出安全整数范围")
             }
         }
     }
@@ -198,7 +197,7 @@ internal class ToolSchemaPreflight(private val definition: JsonObject) {
     private fun expansion(path: String, traversalDepth: Int = 1): Expansion {
         if (traversalDepth > BoundedSchemaJson.MAX_DEPTH) complexity()
         val node = checkNotNull(nodes[path])
-        if (node.visiting) toolFailure(ToolProblemCode.SCHEMA, "Schema 含有循环引用，暂不支持")
+        if (node.visiting) schemaFailure(ToolProblemCode.SCHEMA, "Schema 含有循环引用，暂不支持")
         node.expansion?.let { return it }
         node.visiting = true
         var work = 1
@@ -266,15 +265,15 @@ internal class ToolSchemaPreflight(private val definition: JsonObject) {
         private fun escape(value: String): String = value.replace("~", "~0").replace("/", "~1")
 
         private fun invalidReference(): Nothing =
-            toolFailure(
+            schemaFailure(
                 ToolProblemCode.SCHEMA,
                 "Schema 引用必须是可解析的本地 JSON Pointer；暂不支持外部资源、锚点或百分号编码引用"
             )
 
         private fun complexity(): Nothing =
-            toolFailure(ToolProblemCode.SCHEMA, "Schema 子结构或引用展开的深度、计算量超过安全限制")
+            schemaFailure(ToolProblemCode.SCHEMA, "Schema 子结构或引用展开的深度、计算量超过安全限制")
     }
 }
 
 internal fun invalidToolSchema(): Nothing =
-    toolFailure(ToolProblemCode.SCHEMA, "工具 Schema 不符合所声明的 JSON Schema 规范")
+    schemaFailure(ToolProblemCode.SCHEMA, "工具 Schema 不符合所声明的 JSON Schema 规范")

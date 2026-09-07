@@ -17,10 +17,4 @@ internal fun ToolNetworkException.toToolProblem(): ToolProblem {
     return ToolProblem(problemCode, checkNotNull(message), retryable = code == ToolNetworkErrorCode.NETWORK_ERROR)
 }
 
-internal val ToolNetworkException.couldHaveExecuted: Boolean get() = code in setOf(
-    ToolNetworkErrorCode.UNSUPPORTED_CONTENT_TYPE,
-    ToolNetworkErrorCode.UNSUPPORTED_CONTENT_ENCODING,
-    ToolNetworkErrorCode.INVALID_RESPONSE,
-    ToolNetworkErrorCode.RESPONSE_TOO_LARGE,
-    ToolNetworkErrorCode.NETWORK_ERROR
-)
+internal val ToolNetworkException.couldHaveExecuted: Boolean get() = requestMayHaveBeenSent
