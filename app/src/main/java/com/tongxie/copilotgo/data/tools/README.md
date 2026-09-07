@@ -14,6 +14,8 @@ exposed through `state`; there is no credential readback API for UI consumers.
 
 Edits and deletion require the displayed configuration revision. Endpoint or auth
 binding changes cannot retain an existing credential through `CredentialUpdate.Keep`.
+Credential-header names blocked by the transport are rejected when saving, rather
+than storing a configured key that would silently be omitted from requests.
 Deletion and accepted edits revoke captured revisions before storage IO. Reload
 issues fresh revisions so a failed edit followed by a quick reload cannot revive
 an old captured credential. Storage failures block tools and preserve the record.
