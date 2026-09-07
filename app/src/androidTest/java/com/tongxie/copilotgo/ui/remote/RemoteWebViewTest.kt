@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -34,6 +35,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -46,6 +48,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.tongxie.copilotgo.data.proxy.ProxyConfig
 import com.tongxie.copilotgo.ui.screens.RemoteWebViewContent
 import com.tongxie.copilotgo.ui.theme.CopilotGoTheme
@@ -63,6 +66,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -428,11 +432,82 @@ class RemoteWebViewTest {
     private fun returnToRemote() = compose.onNodeWithText("Return to Remote").performClick()
 
     private fun awaitPage(): WebView {
-        compose.waitUntil(10_000) {
-            browser.state.value.page.phase == RemoteLoadPhase.READY && !browser.state.value.clearingCookies
+        try {
+            compose.waitUntil(10_000) {
+                browser.state.value.page.phase == RemoteLoadPhase.READY && !browser.state.value.clearingCookies
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            val diagnostics = readinessDiagnostics()
+            Log.e("RemoteAcceptance", diagnostics, timeout)
+            try {
+                val directory = acceptanceDirectory()
+                File(directory, "remote-readiness-timeout.txt").writeText(diagnostics)
+                captureDevice(directory, "remote-readiness-timeout")
+            } catch (failure: IOException) {
+                timeout.addSuppressed(failure)
+            } catch (failure: IllegalStateException) {
+                timeout.addSuppressed(failure)
+            } catch (failure: SecurityException) {
+                timeout.addSuppressed(failure)
+            } catch (failure: AssertionError) {
+                timeout.addSuppressed(failure)
+            }
+            throw timeout
         }
         compose.waitForIdle()
         return requireNotNull(currentWebView())
+    }
+
+    private fun readinessDiagnostics(): String {
+        val state = browser.state.value
+        val dom = AtomicReference("callback not received")
+        val done = CountDownLatch(1)
+        var native = "no attached WebView"
+        compose.runOnUiThread {
+            val view = findWebView(compose.activity.window.decorView)
+            if (view == null) {
+                dom.set("no WebView")
+                done.countDown()
+            } else {
+                native = "url=${diagnosticUrl(view.url)}, original=${diagnosticUrl(view.originalUrl)}, " +
+                    "progress=${view.progress}, size=${view.width}x${view.height}, " +
+                    "attached=${view.isAttachedToWindow}, visibility=${view.visibility}, " +
+                    "windowVisibility=${view.windowVisibility}, shown=${view.isShown}, " +
+                    "windowFocus=${view.hasWindowFocus()}, lifecycle=${compose.activity.lifecycle.currentState}, " +
+                    "blockNetwork=${view.settings.blockNetworkLoads}"
+                view.evaluateJavascript("""
+                    (function(){
+                      return JSON.stringify({
+                        ready:document.readyState,
+                        location:location.protocol === 'https:' ? location.origin+location.pathname : location.protocol,
+                        base:document.baseURI.indexOf('https://') === 0 ? document.baseURI.split('?')[0].split('#')[0] : 'non-https',
+                        width:window.innerWidth,height:window.innerHeight,
+                        body:!!document.body,composer:!!document.getElementById('composer')
+                      });
+                    })()
+                """.trimIndent()) {
+                    dom.set(it?.take(2000) ?: "null result")
+                    done.countDown()
+                }
+            }
+        }
+        done.await(2, TimeUnit.SECONDS)
+        return "phase=${state.page.phase}, progress=${state.page.progress}, visible=${state.page.hasVisiblePage}, " +
+            "committed=${state.page.committedForLoad}, finishBeforeCommit=${state.page.finishBeforeCommit}, " +
+            "url=${diagnosticUrl(state.page.url)}, committedUrl=${diagnosticUrl(state.page.committedUrl)}, " +
+            "preferencesReady=${state.preferencesReady}, transportReady=${state.transportReady}, " +
+            "clearingCookies=${state.clearingCookies}, problem=${state.problem}, loads=${loads.get()}\n" +
+            "native: $native\nDOM: ${dom.get()}"
+    }
+
+    private fun diagnosticUrl(value: String?): String {
+        if (value == null) return "null"
+        val address = RemoteNavigationPolicy.classify(value)
+        return if (address.url.isNotEmpty()) {
+            "${address.origin}${Uri.parse(address.url).encodedPath}".take(400)
+        } else {
+            "${Uri.parse(value).scheme ?: "no-scheme"}:(length=${value.length})"
+        }
     }
 
     private fun currentWebView(): WebView? {
@@ -503,10 +578,30 @@ class RemoteWebViewTest {
     }
 
     private fun capture(name: String) {
-        val directory = File(compose.activity.getExternalFilesDir(null), "remote-acceptance")
-        assertTrue(directory.isDirectory || directory.mkdirs())
+        val directory = acceptanceDirectory()
         File(directory, "$name.png").outputStream().use {
             assertTrue(compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+        captureDevice(directory, name)
+    }
+
+    private fun acceptanceDirectory(): File {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(checkNotNull(context.getExternalFilesDir(null)), "remote-acceptance")
+        assertTrue(directory.isDirectory || directory.mkdirs())
+        return directory
+    }
+
+    private fun captureDevice(directory: File, name: String) {
+        val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()) {
+            "Could not capture the controlled device screen"
+        }
+        try {
+            File(directory, "$name-device.png").outputStream().use {
+                assertTrue("Could not save the device screenshot", bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally {
+            bitmap.recycle()
         }
     }
 
