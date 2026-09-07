@@ -1,5 +1,10 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.tongxie.copilotgo.data.chat
 
+import com.tongxie.copilotgo.data.agent.AgentRunRecord
+import com.tongxie.copilotgo.data.agent.AgentSessionSettings
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -158,7 +163,8 @@ data class UiMessage(
     val imageUrls: List<String> = emptyList(),
     val attachments: List<AttachmentRef> = emptyList(),
     val finishReason: String? = null,
-    val submissionId: String? = null
+    val submissionId: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val agentRun: AgentRunRecord? = null
 )
 
 /** UI 用的会话
@@ -172,5 +178,6 @@ data class Session(
     val createdAt: Long = System.currentTimeMillis(),
     var updatedAt: Long = System.currentTimeMillis(),
     var pinned: Boolean = false,
-    var revision: Long = 0
+    var revision: Long = 0,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val agentSettings: AgentSessionSettings = AgentSessionSettings()
 )
