@@ -84,6 +84,7 @@ class RemoteWebViewTest {
     private val proxy = FakeProxy()
     private val webData = FakeWebData()
     private val loads = AtomicInteger()
+    private val fixtureResponses = AtomicInteger()
     private val appProxy = MutableStateFlow(ProxyConfig(enabled = true, host = "10.0.2.2", port = 7890))
     private val proxyInitialized = MutableStateFlow(true)
     private val proxyError = MutableStateFlow<String?>(null)
@@ -95,10 +96,25 @@ class RemoteWebViewTest {
     fun createIsolatedSession() {
         compose.activityRule.scenario.onActivity { activity ->
             configureWindow(activity)
-            browser = RemoteBrowserSession(activity, preferences, proxy, webData) { view, url ->
+            browser = RemoteBrowserSession(
+                activity,
+                preferences,
+                proxy,
+                webData,
+                resourceInterceptor = { request ->
+                    if (request.isForMainFrame && RemoteNavigationPolicy.classify(request.url.toString()).isEmbedded) {
+                        fixtureResponses.incrementAndGet()
+                        WebResourceResponse(
+                            "text/html", "UTF-8", 200, "OK",
+                            mapOf("Cache-Control" to "no-store"),
+                            ByteArrayInputStream(FIXTURE.toByteArray(Charsets.UTF_8))
+                        )
+                    } else blockedResponse()
+                }
+            ) { view, url ->
                 loads.incrementAndGet()
                 view.settings.blockNetworkLoads = true
-                view.loadDataWithBaseURL(url, FIXTURE, "text/html", "UTF-8", null)
+                view.loadUrl(url)
             }
         }
     }
@@ -496,7 +512,8 @@ class RemoteWebViewTest {
             "committed=${state.page.committedForLoad}, finishBeforeCommit=${state.page.finishBeforeCommit}, " +
             "url=${diagnosticUrl(state.page.url)}, committedUrl=${diagnosticUrl(state.page.committedUrl)}, " +
             "preferencesReady=${state.preferencesReady}, transportReady=${state.transportReady}, " +
-            "clearingCookies=${state.clearingCookies}, problem=${state.problem}, loads=${loads.get()}\n" +
+            "clearingCookies=${state.clearingCookies}, problem=${state.problem}, " +
+            "loads=${loads.get()}, fixtureResponses=${fixtureResponses.get()}\n" +
             "native: $native\nDOM: ${dom.get()}"
     }
 
