@@ -103,7 +103,8 @@ fun AttachmentStrip(
                         if (onRemove != null) {
                             IconButton(
                                 onClick = { onRemove(attachment.id) },
-                                enabled = enabled
+                                enabled = enabled,
+                                modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
                                     Icons.Default.Close,

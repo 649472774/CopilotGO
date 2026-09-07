@@ -3,7 +3,6 @@ package com.tongxie.copilotgo.ui
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
-import android.graphics.Bitmap
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -26,6 +25,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -164,13 +164,21 @@ class NativeSettingsAcceptanceTest {
             .performScrollTo().performTextReplacement("wrong")
         Espresso.closeSoftKeyboard()
         rule.onNodeWithContentDescription(text(R.string.action_back)).performClick()
-        rule.onNodeWithText(text(R.string.settings_proxy_continue_editing)).performClick()
-        assertEquals(0, back.get())
-        assertEquals("wrong", fixture.formVm.state.value.draft?.portText)
+        rule.onNodeWithText(text(R.string.settings_proxy_continue_editing))
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        rule.runOnIdle {
+            assertEquals(0, back.get())
+            assertEquals("wrong", fixture.formVm.state.value.draft?.portText)
+        }
         rule.onNodeWithContentDescription(text(R.string.action_back)).performClick()
-        rule.onNodeWithText(text(R.string.settings_proxy_discard)).performClick()
-        assertEquals(1, back.get())
-        assertEquals("7890", fixture.formVm.state.value.draft?.portText)
+        saveScreenshot("proxy-unsaved-dialog-200", dialog = true)
+        rule.onNodeWithText(text(R.string.settings_proxy_discard))
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        rule.waitUntil(5_000) { back.get() == 1 }
+        rule.runOnIdle {
+            assertEquals(1, back.get())
+            assertEquals("7890", fixture.formVm.state.value.draft?.portText)
+        }
     }
 
     @Test fun accountDoesNotNavigateWhenCredentialClearFails() {
@@ -190,8 +198,13 @@ class NativeSettingsAcceptanceTest {
         rule.waitUntil(5_000) { fixture.accountVm.state.value == AccountActionsViewModel.State.Failed }
         assertTrue(fixture.authVm.state.value is AuthState.Failed)
         assertEquals(0, navigated.get())
-        rule.onAllNodesWithText(text(R.string.settings_account_logout_failed)).onLast().assertIsDisplayed()
+        rule.waitUntil(5_000) {
+            rule.onAllNodes(isDialog()).fetchSemanticsNodes().isNotEmpty()
+        }
         saveScreenshot("account-clear-failure-200", dialog = true)
+        rule.onNode(
+            hasText(text(R.string.settings_account_logout_failed)) and hasAnyAncestor(isDialog())
+        ).assertIsDisplayed()
         fixture.credentials.failWrites.set(false)
         rule.onNodeWithText(text(R.string.settings_action_retry)).performClick()
         rule.waitUntil(5_000) { navigated.get() == 1 }
@@ -261,9 +274,8 @@ class NativeSettingsAcceptanceTest {
     private fun saveScreenshot(name: String, dialog: Boolean = false) {
         val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
         assertTrue(directory.isDirectory || directory.mkdirs())
-        (if (dialog) rule.onNode(isDialog()) else rule.onRoot()).captureToImage().asAndroidBitmap().let { bitmap ->
-            File(directory, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        }
+        val bitmap = (if (dialog) rule.onNode(isDialog()) else rule.onRoot()).captureToImage().asAndroidBitmap()
+        saveNativeScreenshotEvidence(bitmap, directory, name)
     }
 
     @Composable

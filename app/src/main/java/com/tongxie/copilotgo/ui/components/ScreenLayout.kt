@@ -172,8 +172,6 @@ fun ConfirmActionDialog(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(description)
-                if (busy) Text(stringResource(R.string.operation_close_hint))
                 error?.let {
                     Text(
                         it,
@@ -181,6 +179,8 @@ fun ConfirmActionDialog(
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                     )
                 }
+                Text(description)
+                if (busy) Text(stringResource(R.string.operation_close_hint))
             }
         },
         confirmButton = {

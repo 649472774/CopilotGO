@@ -1,5 +1,11 @@
 package com.tongxie.copilotgo.ui.markdown
 
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.UiAutomation
+import android.content.ClipData
+import android.content.ClipboardManager as SystemClipboardManager
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
@@ -9,34 +15,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.TextToolbar
-import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.tongxie.copilotgo.ui.components.SimpleMarkdownText
+import com.tongxie.copilotgo.ui.saveNativeScreenshotEvidence
+import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -100,21 +107,39 @@ class MarkdownRenderingTest {
 
     @Test
     fun longPressReallySelectsAndCopiesText() {
-        val clipboard = TestClipboard()
-        val toolbar = TestToolbar()
-        rule.setContent {
-            Fixture(clipboard) {
-                CompositionLocalProvider(LocalTextToolbar provides toolbar) {
-                    SimpleMarkdownText("可以选择并复制这段文字")
-                }
+        val source = "可以选择并复制这段文字"
+        val sentinel = "controlled-clipboard-before-selection"
+        val clipboard = requireNotNull(rule.activity.getSystemService(SystemClipboardManager::class.java))
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val serviceInfo = automation.serviceInfo
+        val originalFlags = serviceInfo.flags
+        serviceInfo.flags = originalFlags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        automation.serviceInfo = serviceInfo
+        try {
+            rule.runOnUiThread { clipboard.setPrimaryClip(ClipData.newPlainText("fixture", sentinel)) }
+            rule.setContent {
+                MaterialTheme { Surface { SimpleMarkdownText(source) } }
             }
-        }
-        waitForText("可以选择并复制这段文字")
-        rule.onNodeWithText("可以选择并复制这段文字").performTouchInput { longClick(center) }
-        rule.runOnIdle {
-            assertNotNull(toolbar.copy)
-            toolbar.copy?.invoke()
-            assertTrue(clipboard.value?.text?.isNotEmpty() == true)
+            waitForText(source)
+            rule.onNodeWithText(source).performTouchInput { longClick(center) }
+            val copyLabel = rule.activity.getString(android.R.string.copy)
+            rule.waitUntil(5_000) { nativeCopyAction(automation, copyLabel, click = false) }
+            val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
+            assertTrue(directory.isDirectory || directory.mkdirs())
+            saveNativeScreenshotEvidence(
+                rule.onRoot().captureToImage().asAndroidBitmap(), directory, "markdown-selection-menu"
+            )
+            assertTrue("The real native Copy action must be clickable", nativeCopyAction(automation, copyLabel, click = true))
+            var copied: String? = null
+            rule.waitUntil(5_000) {
+                copied = rule.runOnUiThread { clipboard.primaryClip?.getItemAt(0)?.text?.toString() }
+                copied?.let { it.isNotEmpty() && it != sentinel } == true
+            }
+            assertTrue("Clipboard must contain text actually selected from the fixture", source.contains(requireNotNull(copied)))
+        } finally {
+            serviceInfo.flags = originalFlags
+            automation.serviceInfo = serviceInfo
+            rule.runOnUiThread { clipboard.clearPrimaryClip() }
         }
     }
 
@@ -177,19 +202,44 @@ class MarkdownRenderingTest {
         override fun getText(): AnnotatedString? = value
     }
 
-    private class TestToolbar : TextToolbar {
-        var copy: (() -> Unit)? = null
-        override var status: TextToolbarStatus = TextToolbarStatus.Hidden
-        override fun showMenu(
-            rect: Rect,
-            onCopyRequested: (() -> Unit)?,
-            onPasteRequested: (() -> Unit)?,
-            onCutRequested: (() -> Unit)?,
-            onSelectAllRequested: (() -> Unit)?
-        ) {
-            copy = onCopyRequested
-            status = TextToolbarStatus.Shown
+    private fun nativeCopyAction(automation: UiAutomation, label: String, click: Boolean): Boolean {
+        val windows = automation.windows
+        try {
+            for (window in windows) {
+                if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val root = window.root ?: continue
+                try {
+                    if (nativeCopyNode(root, null, label, click)) return true
+                } finally {
+                    root.recycle()
+                }
+            }
+            return false
+        } finally {
+            windows.forEach { it.recycle() }
         }
-        override fun hide() { status = TextToolbarStatus.Hidden }
+    }
+
+    private fun nativeCopyNode(
+        node: AccessibilityNodeInfo,
+        clickableParent: AccessibilityNodeInfo?,
+        label: String,
+        click: Boolean
+    ): Boolean {
+        val target = if (node.isClickable && node.isEnabled) node else clickableParent
+        if (node.isVisibleToUser && node.text?.toString()?.equals(label, ignoreCase = true) == true &&
+            target != null && target.isVisibleToUser
+        ) {
+            return !click || target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                if (nativeCopyNode(child, target, label, click)) return true
+            } finally {
+                child.recycle()
+            }
+        }
+        return false
     }
 }

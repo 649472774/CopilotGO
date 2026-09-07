@@ -2,9 +2,11 @@ package com.tongxie.copilotgo.ui
 
 import android.content.Context
 import android.content.ContextWrapper
-import android.graphics.Bitmap
+import android.graphics.Rect as AndroidRect
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +20,8 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -40,6 +44,8 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -141,7 +147,7 @@ class NativeUiAcceptanceTest {
         rule.onNodeWithTag(ChatTags.SEND).assertIsEnabled().performClick()
         assertEquals(1, sent.get())
         rule.onNodeWithContentDescription("移除附件：中文说明文件-\uD83D\uDCC4.txt")
-            .assertHeightIsAtLeast(48.dp).performClick()
+            .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()
         rule.onNodeWithTag(ChatTags.SEND).assertIsNotEnabled()
         saveScreenshot("composer-dark-200")
     }
@@ -248,12 +254,38 @@ class NativeUiAcceptanceTest {
         val session = mutableStateOf(fixtureSession().copy(messages = mutableListOf()))
         val text = mutableStateOf("")
         val sending = mutableStateOf(false)
-        rule.setContent { FixtureTheme { FixtureChat(session, sending, text) } }
+        val chatVisible = mutableStateOf(true)
+        rule.setContent {
+            FixtureTheme(fontScale = LocalDensity.current.fontScale) {
+                if (chatVisible.value) {
+                    BackHandler { chatVisible.value = false }
+                    FixtureChat(session, sending, text)
+                }
+            }
+        }
         rule.onNodeWithTag(ChatTags.INPUT).performClick().performTextInput("测试输入 \uD83D\uDE80")
+        waitForRootIme(visible = true)
+        rule.waitForIdle()
+        saveScreenshot("chat-ime-cjk")
         rule.onNodeWithTag(ChatTags.INPUT).assertIsDisplayed()
         rule.onNodeWithTag(ChatTags.SEND).assertIsDisplayed().assertIsEnabled()
+        val ime = requireNotNull(rootImeGeometry())
+        assertTrue("Physical IME must be open for the bounds assertions", ime.visible && ime.bottomInset > 0)
+        assertControlAboveIme(ChatTags.INPUT, ime)
+        assertControlAboveIme(ChatTags.SEND, ime)
         rule.runOnIdle { assertEquals("测试输入 \uD83D\uDE80", text.value) }
-        saveScreenshot("chat-ime-cjk")
+
+        Espresso.pressBack()
+        waitForRootIme(visible = false)
+        rule.waitForIdle()
+        saveScreenshot("chat-ime-cjk-back")
+        rule.runOnIdle {
+            assertTrue("System Back must hide the IME without navigating away", chatVisible.value)
+            assertTrue("System Back must not finish the chat host", !rule.activity.isFinishing && !rule.activity.isDestroyed)
+            assertEquals("测试输入 \uD83D\uDE80", text.value)
+        }
+        rule.onNodeWithTag(ChatTags.INPUT).assertIsDisplayed()
+        rule.onNodeWithTag(ChatTags.SEND).assertIsDisplayed().assertIsEnabled()
     }
 
     @Test fun offlineStateIsVisibleWithoutDiscardingTheDraft() {
@@ -439,10 +471,77 @@ class NativeUiAcceptanceTest {
         .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
 
     private fun saveScreenshot(name: String) {
-        val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
         val directory = File(rule.activity.getExternalFilesDir(null), "ui-acceptance")
         assertTrue(directory.isDirectory || directory.mkdirs())
-        File(directory, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        saveNativeScreenshotEvidence(rule.onRoot().captureToImage().asAndroidBitmap(), directory, name)
+    }
+
+    private data class ImeGeometry(
+        val visible: Boolean,
+        val bottomInset: Int,
+        val windowBounds: AndroidRect,
+        val windowOriginOnScreen: Offset
+    ) {
+        val topOnScreen: Float get() = (windowBounds.bottom - bottomInset).toFloat()
+    }
+
+    private fun rootImeGeometry(): ImeGeometry? = rule.runOnUiThread {
+        val decor = rule.activity.window.decorView
+        val insets = ViewCompat.getRootWindowInsets(decor) ?: return@runOnUiThread null
+        val onScreen = IntArray(2)
+        val inWindow = IntArray(2)
+        decor.getLocationOnScreen(onScreen)
+        decor.getLocationInWindow(inWindow)
+        ImeGeometry(
+            visible = insets.isVisible(WindowInsetsCompat.Type.ime()),
+            bottomInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom,
+            windowBounds = AndroidRect(rule.activity.windowManager.currentWindowMetrics.bounds),
+            windowOriginOnScreen = Offset(
+                (onScreen[0] - inWindow[0]).toFloat(),
+                (onScreen[1] - inWindow[1]).toFloat()
+            )
+        )
+    }
+
+    private fun waitForRootIme(visible: Boolean) {
+        var previous: ImeGeometry? = null
+        var stableSince = 0L
+        rule.waitUntil(timeoutMillis = 10_000) {
+            val geometry = rootImeGeometry()
+            val matches = geometry != null && geometry.visible == visible &&
+                (if (visible) geometry.bottomInset > 0 else geometry.bottomInset == 0)
+            val now = SystemClock.uptimeMillis()
+            if (!matches || geometry != previous) {
+                previous = geometry
+                stableSince = now
+                false
+            } else {
+                // Wait out platform IME animation, not just Compose's own frame clock.
+                now - stableSince >= 250L
+            }
+        }
+    }
+
+    private fun assertControlAboveIme(tag: String, ime: ImeGeometry) {
+        val node = rule.onNodeWithTag(tag).fetchSemanticsNode()
+        // Use the full measured control, not its clipped visible rectangle.
+        val origin = node.positionInWindow + ime.windowOriginOnScreen
+        val bounds = Rect(
+            origin.x, origin.y,
+            origin.x + node.size.width,
+            origin.y + node.size.height
+        )
+        assertTrue("$tag must have non-empty bounds: $bounds", bounds.width > 0 && bounds.height > 0)
+        assertTrue(
+            "$tag extends under the physical IME: bounds=$bounds, IME top=${ime.topOnScreen}, window=${ime.windowBounds}",
+            bounds.bottom <= ime.topOnScreen + 1f
+        )
+        assertTrue(
+            "$tag must remain inside the real window: bounds=$bounds, window=${ime.windowBounds}",
+            bounds.left >= ime.windowBounds.left - 1f &&
+                bounds.right <= ime.windowBounds.right + 1f &&
+                bounds.top >= ime.windowBounds.top - 1f
+        )
     }
 
     private fun fixtureSession() = Session(

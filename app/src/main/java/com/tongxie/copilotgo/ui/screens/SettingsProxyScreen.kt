@@ -463,7 +463,16 @@ fun SettingsProxyScreen(
                 }
             },
             confirmButton = {
-                Column {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = { showLeaveDialog = false },
+                        enabled = !working,
+                        modifier = Modifier.sizeIn(minHeight = 48.dp)
+                    ) { Text(stringResource(R.string.settings_proxy_continue_editing)) }
                     TextButton(
                         onClick = { formVm.save(proxyVm, leaveAfterSave = true) },
                         enabled = inputsEnabled && form.dirty && draft?.validation?.isValid == true,
@@ -484,13 +493,6 @@ fun SettingsProxyScreen(
                         modifier = Modifier.sizeIn(minHeight = 48.dp)
                     ) { Text(stringResource(R.string.settings_proxy_discard)) }
                 }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showLeaveDialog = false },
-                    enabled = !working,
-                    modifier = Modifier.sizeIn(minHeight = 48.dp)
-                ) { Text(stringResource(R.string.settings_proxy_continue_editing)) }
             }
         )
     }
