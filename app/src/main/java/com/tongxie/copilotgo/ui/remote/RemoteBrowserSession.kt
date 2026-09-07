@@ -13,6 +13,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.ServiceWorkerController
 import android.webkit.ServiceWorkerWebSettings
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -43,6 +45,7 @@ internal class RemoteBrowserSession(
     private val settings: RemoteSettings = RemoteSettingsStore(context),
     proxyBackend: RemoteProxyBackend = AndroidRemoteProxyBackend(),
     private val webData: RemoteWebData = AndroidRemoteWebData(),
+    resourceInterceptor: ((WebResourceRequest) -> WebResourceResponse?)? = null,
     private val loadDocument: (WebView, String) -> Unit = { view, url -> view.loadUrl(url) }
 ) : ComponentCallbacks2 {
     private val appContext = context.applicationContext
@@ -52,7 +55,7 @@ internal class RemoteBrowserSession(
     val uploads = RemoteUploads(appContext, scope, ::notify)
 
     private val proxy = RemoteProxyController(scope, proxyBackend, ::proxyChanged)
-    private val clients = RemoteWebClients(this)
+    private val clients = RemoteWebClients(this, resourceInterceptor)
     private val popups = RemotePopups(appContext, ::navigatePopup, ::notify)
     private val cookieBarrier = CookieLogoutBarrier()
     private var cookieTimeout: Job? = null

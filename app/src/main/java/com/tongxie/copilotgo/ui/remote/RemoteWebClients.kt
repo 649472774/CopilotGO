@@ -21,7 +21,10 @@ import android.webkit.WebViewClient
 import android.net.Uri
 import java.io.ByteArrayInputStream
 
-internal class RemoteWebClients(private val session: RemoteBrowserSession) {
+internal class RemoteWebClients(
+    private val session: RemoteBrowserSession,
+    private val resourceInterceptor: ((WebResourceRequest) -> WebResourceResponse?)? = null
+) {
     private val main = Handler(Looper.getMainLooper())
 
     val navigation = object : WebViewClient() {
@@ -52,7 +55,8 @@ internal class RemoteWebClients(private val session: RemoteBrowserSession) {
                 }
                 main.post { session.mainFrameRequested(view, address.url) }
             }
-            return null
+            // App-supplied content cannot bypass the main-document origin guard.
+            return resourceInterceptor?.invoke(request)
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) =
