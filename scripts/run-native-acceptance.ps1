@@ -61,8 +61,8 @@ if ($LASTEXITCODE -ne 0 -or $changes.Count -gt 0) { throw 'Native acceptance req
 $avd = (Invoke-Device @('emu', 'avd', 'name') | Select-Object -First 1).Trim()
 $sdk = (Invoke-Device @('shell', 'getprop', 'ro.build.version.sdk') | Select-Object -First 1).Trim()
 $currentUser = (Invoke-Device @('shell', 'am', 'get-current-user') | Select-Object -First 1).Trim()
-$unlocked = (Invoke-Device @('shell', 'cmd', 'user', 'is-user-unlocked', '0') | Select-Object -First 1).Trim()
-if ($avd -ne $expectedAvd -or $sdk -ne $expectedSdk -or $currentUser -ne '0' -or $unlocked -ne 'true') {
+$userState = (Invoke-Device @('shell', 'am', 'get-started-user-state', '0') | Select-Object -First 1).Trim()
+if ($avd -ne $expectedAvd -or $sdk -ne $expectedSdk -or $currentUser -ne '0' -or $userState -ne 'RUNNING_UNLOCKED') {
     throw "Device identity/unlock attestation failed for $Serial; no instrumentation was started."
 }
 $focusBefore = (Invoke-Device @('shell', 'dumpsys', 'window') |
@@ -106,6 +106,7 @@ $result = [ordered]@{
     sdk = [int]$sdk
     currentUser = [int]$currentUser
     userUnlocked = $true
+    userState = $userState
     startedAt = $startedAt.ToString('o')
     classes = $Classes
     expectedTests = $ExpectedTests
