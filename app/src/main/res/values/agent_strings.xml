@@ -27,6 +27,7 @@
     <string name="agent_limits_preserve">到达上限或失败时会停止并保留已有回答。停止不会清空下一条草稿，也不代表远程操作已撤销。</string>
     <string name="agent_tools_settings">搜索与 MCP 设置</string>
     <string name="agent_tools_summary">免密钥搜索、公开网页读取、远程 HTTPS 工具与单次授权</string>
+    <string name="agent_server_route_invalid">服务器配置地址无效，请返回工具设置重新选择。</string>
     <string name="agent_settings_loading">工具设置尚未就绪，当前不会自动授权外部请求。</string>
     <string name="agent_settings_failed">工具设置无法读取，请打开搜索与 MCP 设置处理。不会使用替代连接或凭据。</string>
     <string name="agent_provider_keyless">搜索服务：Exa 免密钥基础搜索。免费额度有限，可能限流；不是无限或保证可用的服务。</string>

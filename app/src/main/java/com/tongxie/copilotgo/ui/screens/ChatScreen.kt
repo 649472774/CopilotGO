@@ -95,6 +95,7 @@ import com.tongxie.copilotgo.data.chat.Session
 import com.tongxie.copilotgo.data.chat.SessionLoadState
 import com.tongxie.copilotgo.data.chat.UiMessage
 import com.tongxie.copilotgo.data.storage.AttachmentImportException
+import com.tongxie.copilotgo.data.tools.ToolSettingsState
 import com.tongxie.copilotgo.ui.components.AttachmentPreviewDialog
 import com.tongxie.copilotgo.ui.components.ChatComposer
 import com.tongxie.copilotgo.ui.components.ChatTags
@@ -105,10 +106,13 @@ import com.tongxie.copilotgo.ui.components.PageScaffold
 import com.tongxie.copilotgo.ui.components.ScreenState
 import com.tongxie.copilotgo.ui.components.UiAttachment
 import com.tongxie.copilotgo.ui.agent.AgentModeButton
+import com.tongxie.copilotgo.ui.agent.AgentModeDialog
 import com.tongxie.copilotgo.ui.agent.AgentRunDetailsDialog
 import com.tongxie.copilotgo.ui.agent.AgentToolbarActivity
 import com.tongxie.copilotgo.ui.agent.agentModelDisabledReason
 import com.tongxie.copilotgo.ui.agent.agentRunLabel
+import com.tongxie.copilotgo.ui.agent.agentToolDisclosure
+import com.tongxie.copilotgo.ui.agent.hasConsentedPublicWebTools
 import com.tongxie.copilotgo.ui.agent.agentCitationLinks
 import com.tongxie.copilotgo.ui.agent.blockedAgentReplayMessageIds
 import com.tongxie.copilotgo.ui.agent.rememberAgentSourceOpener
@@ -136,6 +140,8 @@ fun ChatScreen(
     modelsVm: SessionListViewModel,
     draftsVm: ChatDraftsViewModel,
     filesVm: LibraryFilesViewModel,
+    toolSettings: ToolSettingsState,
+    onOpenTools: () -> Unit,
     onBack: () -> Unit
 ) {
     val session by viewModel.session.collectAsStateWithLifecycle()
@@ -206,6 +212,9 @@ fun ChatScreen(
     var editText by rememberSaveable(sessionId) { mutableStateOf("") }
     var actionBusy by remember { mutableStateOf(false) }
     var changingModel by remember { mutableStateOf(false) }
+    var changingAgentSettings by remember { mutableStateOf(false) }
+    var showAgentMode by rememberSaveable(sessionId) { mutableStateOf(false) }
+    var agentSettingsError by remember { mutableStateOf<String?>(null) }
     var actionError by remember { mutableStateOf<String?>(null) }
     fun requestAction(kind: String, message: UiMessage) {
         if (kind == "edit" && message.content.length > DraftLimits.TEXT_CHARS) {
@@ -261,6 +270,9 @@ fun ChatScreen(
                 }
             },
             changingModel = changingModel,
+            agentChanging = changingAgentSettings,
+            onOpenAgentMode = { agentSettingsError = null; showAgentMode = true },
+            onAgentDecision = viewModel::respondToApproval,
             networkUnavailable = network == NetworkAvailability.UNAVAILABLE,
             onNetworkSettings = {
                 try {
@@ -274,11 +286,13 @@ fun ChatScreen(
             onRefreshModels = { modelsVm.refreshModels(force = true) },
             onTextChange = { draftsVm.updateText(sessionId, it) },
             onSend = {
+                val submittedSettings = loaded.agentSettings
                 draftsVm.submit(sessionId) { snapshot ->
                     viewModel.submit(
                         snapshot.text.trim(),
                         attachmentRefs = snapshot.attachments,
-                        submissionId = snapshot.submissionId
+                        submissionId = snapshot.submissionId,
+                        agentSettings = submittedSettings
                     )
                 }
             },
@@ -334,6 +348,37 @@ fun ChatScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (loaded != null && showAgentMode) {
+        AgentModeDialog(
+            settings = loaded.agentSettings,
+            model = catalog.models.firstOrNull { it.id == loaded.model },
+            providerDisclosure = agentToolDisclosure(toolSettings),
+            publicWebReady = hasConsentedPublicWebTools(toolSettings),
+            saving = changingAgentSettings,
+            error = agentSettingsError,
+            onSave = { settings, expected ->
+                if (changingAgentSettings || sending || draft.submitting) {
+                    agentSettingsError = context.getString(R.string.agent_mode_busy)
+                } else {
+                    changingAgentSettings = true
+                    agentSettingsError = null
+                    scope.launch {
+                        try {
+                            when (val result = viewModel.setAgentSettingsAndAwait(settings, expectedSettings = expected)) {
+                                OperationResult.Accepted -> showAgentMode = false
+                                is OperationResult.Rejected -> agentSettingsError = result.message
+                            }
+                        } finally {
+                            changingAgentSettings = false
+                        }
+                    }
+                }
+            },
+            onOpenTools = onOpenTools,
+            onClose = { showAgentMode = false; agentSettingsError = null }
         )
     }
 
@@ -597,7 +642,7 @@ fun ChatContent(
                         } else if (onOpenAgentMode != null) {
                             AgentModeButton(
                                 enabled = session.agentSettings.enabled,
-                                onClick = onOpenAgentMode,
+                                onClick = { focus.clearFocus(); keyboard?.hide(); onOpenAgentMode() },
                                 interactive = !sending && !draft.submitting && !changingModel && !agentChanging
                             )
                         }
