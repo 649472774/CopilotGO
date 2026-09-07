@@ -32,11 +32,13 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
@@ -135,13 +137,14 @@ class AgentControllerAcceptanceTest {
         rule.onNodeWithTag(ChatTags.INPUT).performClick().performTextReplacement(next)
         waitForIme(visible = true)
         val ime = requireNotNull(imeGeometry())
+        saveImeGeometry("agent-controller-ime-before-bounds", ime, fixture)
+        saveScreenshot("agent-controller-ime-200")
         rule.onNodeWithTag(ChatTags.STOP).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         assertAboveIme(ChatTags.STOP, ime)
         assertAboveIme(ChatTags.INPUT, ime)
         val input = fullBounds(ChatTags.INPUT, ime)
         val viewport = fullBounds(ChatTags.EDITOR_VIEWPORT, ime)
         assertTrue("The whole editor must fit, not just a clipped fragment", input.top >= viewport.top - 1 && input.bottom <= viewport.bottom + 1)
-        saveScreenshot("agent-controller-ime-200")
 
         Espresso.pressBack()
         waitForIme(visible = false)
@@ -275,9 +278,32 @@ class AgentControllerAcceptanceTest {
 
     private fun assertAboveIme(tag: String, ime: ImeGeometry) {
         val bounds = fullBounds(tag, ime)
-        assertTrue("$tag must remain below system bars", bounds.top >= ime.window.top + ime.topSafe - 1)
-        assertTrue("$tag must remain above the physical IME", bounds.bottom <= ime.window.bottom - ime.bottom + 1)
-        assertTrue("$tag must fit the actual window", bounds.left >= ime.window.left - 1 && bounds.right <= ime.window.right + 1)
+        assertTrue("$tag must remain below system bars: bounds=$bounds, ime=$ime", bounds.top >= ime.window.top + ime.topSafe - 1)
+        assertTrue("$tag must remain above the physical IME: bounds=$bounds, ime=$ime", bounds.bottom <= ime.window.bottom - ime.bottom + 1)
+        assertTrue("$tag must fit the actual window: bounds=$bounds, ime=$ime", bounds.left >= ime.window.left - 1 && bounds.right <= ime.window.right + 1)
+    }
+
+    private fun saveImeGeometry(name: String, ime: ImeGeometry, fixture: AgentControllerFixture) {
+        val directory = File(rule.activity.getExternalFilesDir(null), "agent-acceptance")
+        assertTrue(directory.isDirectory || directory.mkdirs())
+        val nodes = listOf(
+            ChatTags.INPUT, ChatTags.EDITOR_VIEWPORT, ChatTags.STOP, ChatTags.MESSAGES, ChatTags.LATEST
+        ).flatMap { tag ->
+            rule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().map { node ->
+                val scroll = if (node.config.contains(SemanticsProperties.VerticalScrollAxisRange)) {
+                    val range = node.config[SemanticsProperties.VerticalScrollAxisRange]
+                    "value=${range.value()},max=${range.maxValue()}"
+                } else "none"
+                "tag=$tag; placed=${node.layoutInfo.isPlaced}; position=${node.positionInWindow}; " +
+                    "size=${node.size}; visibleBounds=${node.boundsInWindow}; scroll=$scroll"
+            }
+        }.joinToString("\n")
+        val state = "uptime=${SystemClock.uptimeMillis()}; ime=$ime; " +
+            "sending=${fixture.center.sendingFlow(fixture.id).value}; " +
+            "draftCharacters=${fixture.drafts.state(fixture.id).value.draft.text.length}"
+        File(directory, "$name.txt").writeText(
+            state + "\n" + nodes + "\n" + rule.onRoot(useUnmergedTree = true).printToString()
+        )
     }
 
     private fun configureWindow() {
