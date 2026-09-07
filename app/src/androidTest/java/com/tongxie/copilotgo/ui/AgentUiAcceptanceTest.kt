@@ -49,6 +49,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.Density
@@ -185,11 +186,13 @@ class AgentUiAcceptanceTest {
         )
         val run = mutableStateOf(waitingRun(original))
         val reviewed = mutableStateOf(original)
+        val reviewedBindings = mutableListOf<AgentApprovalBinding>()
         val decisions = mutableListOf<AgentApprovalBinding>()
         rule.setContent {
             FixtureTheme {
                 AgentRunDetailsContent(
-                    run.value, reviewed.value, false, null, { reviewed.value = it },
+                    run.value, reviewed.value, false, null,
+                    { reviewedBindings += it.binding; reviewed.value = it },
                     onDecision = { binding, _ -> decisions += binding },
                     onStop = {}, onBack = {}, onOpenSource = {}
                 )
@@ -202,7 +205,13 @@ class AgentUiAcceptanceTest {
         rule.onNodeWithText(text(R.string.agent_approval_stale)).performScrollTo().assertIsDisplayed()
         assertTrue(decisions.isEmpty())
         saveScreenshot("agent-stale-approval-200")
-        rule.onNodeWithTag(AgentTags.REVIEW).performScrollTo().performClick()
+        saveSemantics("agent-review-before-lazy-scroll")
+        rule.onNodeWithTag(AgentTags.DETAILS).performScrollToKey("pending-${current.binding.approvalId}")
+        rule.onNodeWithTag(AgentTags.REVIEW).assertIsDisplayed().assertIsEnabled()
+        saveSemantics("agent-review-before-current-click")
+        rule.onNodeWithTag(AgentTags.REVIEW).performClick()
+        rule.runOnIdle { assertEquals(listOf(current.binding), reviewedBindings) }
+        saveSemantics("agent-review-after-current-click")
         waitForEnabled(AgentTags.APPROVE)
         rule.onNodeWithTag(AgentTags.DENY).performScrollTo().performClick()
         rule.runOnIdle { assertEquals(listOf(current.binding), decisions) }
@@ -232,8 +241,14 @@ class AgentUiAcceptanceTest {
         }
         rule.onNodeWithTag(AgentTags.DENY).performScrollTo().performClick()
         rule.onNodeWithText(text(R.string.agent_call_denied)).performScrollTo()
+        saveSemantics("agent-denial-before-lazy-scroll")
+        rule.onNodeWithTag(AgentTags.DETAILS).performScrollToKey("${run.value.id}-${proposal.binding.callId}")
         saveSemantics("agent-denial")
+        val callRecord = rule.onNodeWithTag("agent-call-record-${proposal.binding.callId}").fetchSemanticsNode()
+        val callStatus = rule.onNodeWithTag("agent-call-status-${proposal.binding.callId}").fetchSemanticsNode()
+        assertTrue("The call record must actually be placed", callRecord.layoutInfo.isPlaced && callStatus.layoutInfo.isPlaced)
         rule.onNodeWithText(text(R.string.agent_call_denied)).assertIsDisplayed()
+        rule.onNodeWithTag(AgentTags.DETAILS).performScrollToKey("review-${proposal.binding.approvalId}")
         rule.onNodeWithTag(AgentTags.APPROVE).performScrollTo().assertIsNotEnabled()
         rule.runOnIdle {
             assertEquals(listOf(AgentApprovalDecision.DENY), decisions)
@@ -334,6 +349,12 @@ class AgentUiAcceptanceTest {
             }
         }
         rule.waitUntil(10_000) { rule.onAllNodes(textOwner("[S1]", code = true)).fetchSemanticsNodes().isNotEmpty() }
+        val body = rule.onNodeWithTag("agent-message-body-${message.id}").fetchSemanticsNode()
+        val sources = rule.onNodeWithTag("agent-message-sources-${message.id}").fetchSemanticsNode()
+        assertTrue(
+            "Sources must follow the answer in flow, never overlap its links or literal text",
+            body.positionInWindow.y + body.size.height <= sources.positionInWindow.y + 1f
+        )
         rule.onNode(textOwner("[S1]", code = false)).performScrollTo().assertIsDisplayed()
         saveSemantics("agent-citation-before-link")
         rule.onNode(textOwner("[S1]", code = false)).performTouchInput { click(center) }
@@ -540,11 +561,21 @@ class AgentUiAcceptanceTest {
         val textDetails = listOf("[S1]", "[S999]").flatMap { value ->
             rule.onAllNodesWithText(value, useUnmergedTree = true).fetchSemanticsNodes().map { node ->
                 val text = if (node.config.contains(SemanticsProperties.Text)) node.config[SemanticsProperties.Text] else emptyList()
-                "text=$value; position=${node.positionInWindow}; size=${node.size}; bounds=${node.boundsInWindow}; " +
+                "text=$value; placed=${node.layoutInfo.isPlaced}; position=${node.positionInWindow}; size=${node.size}; bounds=${node.boundsInWindow}; " +
                     "links=${text.flatMap { it.getLinkAnnotations(0, it.length) }}; spans=${text.flatMap { it.spanStyles }}"
             }
         }.joinToString("\n")
-        File(directory, "$name.txt").writeText(rule.onRoot(useUnmergedTree = true).printToString() + "\n\n" + textDetails)
+        val actionDetails = listOf(
+            AgentTags.REVIEW, AgentTags.APPROVE, AgentTags.DENY,
+            "agent-call-record-call-fixture", "agent-call-status-call-fixture"
+        ).flatMap { tag ->
+            rule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().map { node ->
+                "tag=$tag; placed=${node.layoutInfo.isPlaced}; position=${node.positionInWindow}; size=${node.size}; bounds=${node.boundsInWindow}"
+            }
+        }.joinToString("\n")
+        File(directory, "$name.txt").writeText(
+            rule.onRoot(useUnmergedTree = true).printToString() + "\n\n" + textDetails + "\n\n" + actionDetails
+        )
     }
 
     private fun assertNoLinkAnnotations(value: String, code: Boolean) {

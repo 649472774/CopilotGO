@@ -103,6 +103,9 @@ class AgentPresentationTest {
         assertEquals(R.string.agent_call_failed, agentCallLabel(call.copy(
             status = AgentToolCallStatus.SUCCEEDED, result = AgentToolResult("controlled error", isError = true)
         )))
+        assertEquals(R.string.agent_call_denied, agentCallLabel(call.copy(
+            status = AgentToolCallStatus.DENIED, result = AgentToolResult("controlled denial", isError = true)
+        )))
         assertEquals("0.001", agentDurationSeconds(1))
         assertEquals("1.25", agentDurationSeconds(1_250))
         assertEquals("180", agentDurationSeconds(180_000))

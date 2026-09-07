@@ -234,8 +234,10 @@ internal fun AgentRunDetailsContent(
                 }
             }
             items(calls, key = { "${run.id}-${it.id}" }) { call ->
-                AgentCallDetails(call)
-                HorizontalDivider()
+                Column(Modifier.fillMaxWidth().testTag("agent-call-record-${call.id}")) {
+                    AgentCallDetails(call)
+                    HorizontalDivider()
+                }
             }
             if (run.sources.isNotEmpty()) {
                 item(key = "sources-heading") {
