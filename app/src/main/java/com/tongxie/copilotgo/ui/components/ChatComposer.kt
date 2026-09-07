@@ -2,12 +2,15 @@ package com.tongxie.copilotgo.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -35,16 +38,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import com.tongxie.copilotgo.R
 
 object ChatTags {
     const val INPUT = "chat_input"
+    const val EDITOR_VIEWPORT = "chat_editor_viewport"
     const val SEND = "chat_send"
     const val STOP = "chat_stop"
     const val ADD = "chat_add"
@@ -80,104 +88,144 @@ fun ChatComposer(
     val canSubmit = canEdit && submissionEnabled && !importing && (text.isNotBlank() || attachments.isNotEmpty())
 
     Surface(modifier = modifier, tonalElevation = 2.dp) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Column(
-                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                notice()
-            if (attachments.isNotEmpty()) {
-                AttachmentStrip(
-                    attachments = attachments,
-                    onPreview = onPreviewAttachment,
-                    onRemove = onRemoveAttachment,
-                    enabled = canEdit && !importing,
-                    compact = compactHeight,
-                    modifier = Modifier.fillMaxWidth().testTag(ChatTags.ATTACHMENTS)
-                )
-            }
-            if (importing) {
-                Text(
-                    stringResource(R.string.attachment_importing),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                )
-            }
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                enabled = canEdit,
-                label = { Text(stringResource(R.string.composer_label)) },
-                placeholder = { Text(stringResource(R.string.chat_input_hint)) },
-                maxLines = if (compactHeight) 2 else 6,
-                shape = MaterialTheme.shapes.large,
-                textStyle = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.fillMaxWidth().testTag(ChatTags.INPUT)
-            )
-            supportingText?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Box {
-                    TextButton(
-                        onClick = { addMenu = true },
-                        enabled = canEdit && !importing,
-                        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.ADD)
+        BoxWithConstraints(Modifier.padding(horizontal = 16.dp)) {
+            val inlineActions = constraints.hasBoundedWidth && maxWidth >= 600.dp && maxHeight < 200.dp
+            val boundedHeight = constraints.hasBoundedHeight
+            val editorScroll = rememberScrollState()
+            Layout(
+                content = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().testTag(ChatTags.EDITOR_VIEWPORT)
+                            .then(if (boundedHeight) Modifier.verticalScroll(editorScroll) else Modifier),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null)
-                        Text(stringResource(R.string.composer_add), Modifier.padding(start = 8.dp))
+                        notice()
+                        if (attachments.isNotEmpty()) {
+                            AttachmentStrip(
+                                attachments = attachments,
+                                onPreview = onPreviewAttachment,
+                                onRemove = onRemoveAttachment,
+                                enabled = canEdit && !importing,
+                                compact = compactHeight,
+                                modifier = Modifier.fillMaxWidth().testTag(ChatTags.ATTACHMENTS)
+                            )
+                        }
+                        if (importing) {
+                            Text(
+                                stringResource(R.string.attachment_importing),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                            )
+                        }
+                        OutlinedTextField(
+                            value = text,
+                            onValueChange = onTextChange,
+                            enabled = canEdit,
+                            label = { Text(stringResource(R.string.composer_label)) },
+                            placeholder = { Text(stringResource(R.string.chat_input_hint)) },
+                            maxLines = if (inlineActions) 1 else if (compactHeight) 2 else 6,
+                            shape = MaterialTheme.shapes.large,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.fillMaxWidth().testTag(ChatTags.INPUT)
+                        )
+                        supportingText?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.composer_add_file)) },
-                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
-                            onClick = { addMenu = false; onPickText() }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.composer_add_image)) },
-                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
-                            onClick = { addMenu = false; onPickImages() }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.composer_voice)) },
-                            leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) },
-                            onClick = { addMenu = false; onVoice() }
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Box {
+                            TextButton(
+                                onClick = { addMenu = true },
+                                enabled = canEdit && !importing,
+                                modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.ADD)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Text(stringResource(R.string.composer_add), Modifier.padding(start = 8.dp))
+                            }
+                            DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.composer_add_file)) },
+                                    leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
+                                    onClick = { addMenu = false; onPickText() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.composer_add_image)) },
+                                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
+                                    onClick = { addMenu = false; onPickImages() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.composer_voice)) },
+                                    leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                                    onClick = { addMenu = false; onVoice() }
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        if (sending && !submitting) {
+                            FilledTonalButton(
+                                onClick = onStop,
+                                modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.STOP)
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = null)
+                                Text(stringResource(R.string.composer_stop), Modifier.padding(start = 8.dp))
+                            }
+                        } else {
+                            Button(
+                                onClick = onSend,
+                                enabled = canSubmit && !sending,
+                                modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.SEND)
+                            ) {
+                                if (submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
+                                Text(
+                                    stringResource(if (submitting) R.string.composer_submitting else R.string.chat_send),
+                                    Modifier.padding(start = 8.dp)
+                                )
+                            }
+                        }
                     }
                 }
-                if (sending && !submitting) {
-                    FilledTonalButton(
-                        onClick = onStop,
-                        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.STOP)
-                    ) {
-                        Icon(Icons.Default.Stop, contentDescription = null)
-                        Text(stringResource(R.string.composer_stop), Modifier.padding(start = 8.dp))
-                    }
-                } else {
-                    Button(
-                        onClick = onSend,
-                        enabled = canSubmit && !sending,
-                        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.SEND)
-                    ) {
-                        if (submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
-                        Text(
-                            stringResource(if (submitting) R.string.composer_submitting else R.string.chat_send),
-                            Modifier.padding(start = 8.dp)
-                        )
-                    }
+            ) { measurables, available ->
+                val gap = 8.dp.roundToPx()
+                val padding = if (inlineActions) 0 else 8.dp.roundToPx()
+                val contentHeight = if (boundedHeight) {
+                    (available.maxHeight - padding * 2).coerceAtLeast(0)
+                } else Constraints.Infinity
+                val actionsWidth = if (inlineActions) {
+                    (available.maxWidth - 280.dp.roundToPx() - gap).coerceAtLeast(0)
+                } else available.maxWidth
+                val actions = measurables[1].measure(Constraints(
+                    minWidth = if (!inlineActions && available.hasBoundedWidth) actionsWidth else 0,
+                    maxWidth = actionsWidth,
+                    maxHeight = contentHeight
+                ))
+                val editorWidth = if (inlineActions) available.maxWidth - actions.width - gap else available.maxWidth
+                val editorHeight = if (!boundedHeight || inlineActions) contentHeight
+                    else (contentHeight - actions.height - gap).coerceAtLeast(0)
+                val editor = measurables[0].measure(Constraints(
+                    minWidth = if (available.hasBoundedWidth) editorWidth else 0,
+                    maxWidth = editorWidth,
+                    maxHeight = editorHeight
+                ))
+                val width = available.constrainWidth(
+                    if (inlineActions) editor.width + gap + actions.width else maxOf(editor.width, actions.width)
+                )
+                val height = available.constrainHeight(
+                    (if (inlineActions) maxOf(editor.height, actions.height) else editor.height + gap + actions.height) +
+                        padding * 2
+                )
+                // Move the same editor node rather than recreate it when the IME changes available space.
+                layout(width, height) {
+                    editor.placeRelative(0, padding)
+                    if (inlineActions) actions.placeRelative(editor.width + gap, height - actions.height - padding)
+                    else actions.placeRelative(0, padding + editor.height + gap)
                 }
             }
         }

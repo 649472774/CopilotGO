@@ -274,6 +274,7 @@ class NativeUiAcceptanceTest {
         assertTrue("Physical IME must be open for the bounds assertions", ime.visible && ime.bottomInset > 0)
         assertControlAboveIme(ChatTags.INPUT, ime)
         assertControlAboveIme(ChatTags.SEND, ime)
+        assertEditorFitsViewport(ime)
         val sendBounds = controlBoundsOnScreen(ChatTags.SEND, ime)
         val allowedGap = rule.activity.resources.displayMetrics.density * 24f
         assertTrue(
@@ -287,6 +288,13 @@ class NativeUiAcceptanceTest {
         }
         rule.runOnIdle { assertEquals("测试输入 \uD83D\uDE80", text.value) }
 
+        val multiline = "测试输入 \uD83D\uDE80\n第二行"
+        rule.onNodeWithTag(ChatTags.INPUT).performTextInput("\n第二行")
+        rule.waitForIdle()
+        rule.runOnIdle { assertEquals(multiline, text.value) }
+        if (ime.windowBounds.width() > ime.windowBounds.height()) assertEditorFitsViewport(ime)
+        saveScreenshot("chat-ime-cjk-multiline")
+
         Espresso.pressBack()
         waitForRootIme(visible = false)
         rule.waitForIdle()
@@ -294,7 +302,7 @@ class NativeUiAcceptanceTest {
         rule.runOnIdle {
             assertTrue("System Back must hide the IME without navigating away", chatVisible.value)
             assertTrue("System Back must not finish the chat host", !rule.activity.isFinishing && !rule.activity.isDestroyed)
-            assertEquals("测试输入 \uD83D\uDE80", text.value)
+            assertEquals(multiline, text.value)
         }
         rule.onNodeWithTag(ChatTags.INPUT).assertIsDisplayed()
         rule.onNodeWithTag(ChatTags.SEND).assertIsDisplayed().assertIsEnabled()
@@ -565,6 +573,19 @@ class NativeUiAcceptanceTest {
             bounds.left >= ime.windowBounds.left - 1f &&
                 bounds.right <= ime.windowBounds.right + 1f &&
                 bounds.top >= ime.windowBounds.top - 1f
+        )
+    }
+
+    private fun assertEditorFitsViewport(ime: ImeGeometry) {
+        val input = controlBoundsOnScreen(ChatTags.INPUT, ime)
+        val viewport = rule.onNodeWithTag(ChatTags.EDITOR_VIEWPORT).fetchSemanticsNode().boundsInWindow
+        val origin = ime.windowOriginOnScreen
+        assertTrue(
+            "The full editor must fit its viewport, not be clipped by composer actions: input=$input, viewport=$viewport",
+            input.left >= viewport.left + origin.x - 1f &&
+                input.right <= viewport.right + origin.x + 1f &&
+                input.top >= viewport.top + origin.y - 1f &&
+                input.bottom <= viewport.bottom + origin.y + 1f
         )
     }
 
