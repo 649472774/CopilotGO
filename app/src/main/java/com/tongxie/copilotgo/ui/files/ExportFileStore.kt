@@ -170,7 +170,7 @@ class ExportFileStore(cacheDir: File) {
                 source.excerpt?.let { writeLiteralBlock(writer, it) }
                 val destination = agentSourceDestination(source.url)
                 if (isAgentSourceId(source.id) && destination != null) {
-                    writer.write("[${source.id}]: <$destination>\n\n")
+                    writer.write("[${source.id}](<$destination>)\n\n")
                 }
             }
         }
