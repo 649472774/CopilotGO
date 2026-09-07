@@ -16,6 +16,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+. (Join-Path $PSScriptRoot 'native-acceptance-result.ps1')
 Add-Type -AssemblyName System.Drawing
 $root = Split-Path -Parent $PSScriptRoot
 $sdkRoot = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
@@ -136,7 +137,7 @@ $exitCode = $LASTEXITCODE
 $watch.Stop()
 $output | Set-Content -LiteralPath (Join-Path $directory 'instrumentation.log') -Encoding utf8
 $text = $output -join "`n"
-$completion = [regex]::Match($text, '(?m)^OK \((\d+) tests?\)')
+$summary = Get-NativeTestSummary -Output $text -ExpectedTests $ExpectedTests -ExitCode $exitCode
 $result.durationSeconds = [math]::Round($watch.Elapsed.TotalSeconds, 3)
 $result.completedAt = [DateTimeOffset]::Now.ToString('o')
 $result.adbExitCode = $exitCode
@@ -144,12 +145,9 @@ $result.systemFocusAfter = (Invoke-Device @('shell', 'dumpsys', 'window') |
     Where-Object { $_ -match 'mCurrentFocus=' }) -join ''
 $result.actualConfigurationAfter = @(Invoke-Device @('shell', 'dumpsys', 'activity') |
     Where-Object { $_ -match 'mGlobalConfiguration:' } | Select-Object -First 1)
-$result.executedTests = if ($completion.Success) { [int]$completion.Groups[1].Value } else { $null }
-$result.outcome = if (
-    $exitCode -eq 0 -and $completion.Success -and
-    [int]$completion.Groups[1].Value -eq $ExpectedTests -and
-    $text -notmatch 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|INSTRUMENTATION_STATUS_CODE: -3'
-) { 'PASS' } else { 'FAIL' }
+$result.executedTests = $summary.executedTests
+$result.failedTests = $summary.failedTests
+$result.outcome = $summary.outcome
 if ($result.systemFocusAfter -match 'Application Not Responding') {
     $result.outcome = 'FAIL'
     $result.environmentBlock = 'An ANR dialog obscured the device; native acceptance cannot be claimed.'
