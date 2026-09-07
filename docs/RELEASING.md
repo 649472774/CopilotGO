@@ -21,6 +21,13 @@ GitHub Release 和用户最终交付目录由集成负责人统一操作。脚�
 发布包和本机基线包的证书相同；这不自动证明任何尚未检查的设备安装身份。
 公开记录位于 `scripts/release-signing.json`。保留原标签和 APK，不重写历史。
 
+后续已发布兼容版本为 `v0.2.0` / code 35，源码
+`90c84a7ddea7b6f36c2ca609d541bdd0c077faec`，APK SHA-256 为
+`47fb1867b87554844f9abcf5171b96e952be6524bbc077c018f2260a488c7022`，
+签名仍为上述证书。下一阶段从已经迁移的 code 35 fixture 数据继续升级，不重新
+导入或重置历史种子；构建下一阶段交付包时显式使用 `-RollbackTag v0.2.0`。
+原始 `v0.1.33` 标签、签名记录和 APK 仍保留。
+
 ## 1. 先准备并提交版本
 
 在当前工作树使用 PowerShell 7。脚本默认**不升版、不装机、不复制、不提交、不推送**。
@@ -146,6 +153,19 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
   factory 与真实 Keystore；核对迁移、往返读取和损坏密文时不回退为伪成功。
 
 这些类需要由集成设备 lane 实际执行；编译通过不能代替执行结果。
+
+`scripts/run-native-acceptance.ps1` 复用现有 AndroidJUnitRunner，供独占设备 lane
+记录每次实际运行。它不启动模拟器、不安装 APK、不写入种子、不清数据，也不修改
+字体、显示或旋转设置。调用时提供明确的 `-Serial`、`-Label`、已存在的绝对路径
+`-EvidenceRoot`、`-Classes`、`-ExpectedTests` 和 `-ExpectedVersionCode`。
+只允许已保留的 `emulator-5582` / `CopilotGO_Upgrade_AOSP_API31` 与
+`emulator-5584` / `CopilotGO_Upgrade_AOSP_API36`，一次使用一个设备。
+脚本在运行前核对 AVD、API、用户解锁状态、已安装 APK 字节、发布证书与源码状态。
+证据目录不可覆盖；结果包括实际窗口配置、命令、精确源码 SHA、APK 摘要与测试结果。
+传入 `-ExpectedOrientation` 时，还要求本次生成的完整设备截图证明实际方向，
+不是只相信旋转设置。只有受控 fixture 截图目录会被读取，旧截图不会算作本次证据。
+`GoldenSessionMigrationInstrumentedTest` 在已接受的 code 35 设备上只使用
+`goldenSessionsMode=verify-migrated`，不能再次执行 `migrate-first`。
 
 回滚标签保证能找回源码，但 Android 通常不允许把较低 versionCode 直接覆盖较高版本。
 优先从保留标签修复并发布递增 versionCode 的兼容版本。不要强制重置会话、恢复
