@@ -73,6 +73,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,6 +82,11 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.data.agent.AgentApprovalBinding
+import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
+import com.tongxie.copilotgo.data.agent.AgentApprovalRequest
+import com.tongxie.copilotgo.data.agent.AgentApprovalResponse
+import com.tongxie.copilotgo.data.agent.AgentRunRecord
 import com.tongxie.copilotgo.data.chat.AttachmentKind
 import com.tongxie.copilotgo.data.chat.AttachmentRef
 import com.tongxie.copilotgo.data.chat.ModelCatalogState
@@ -97,6 +104,14 @@ import com.tongxie.copilotgo.ui.components.ModelPickerInline
 import com.tongxie.copilotgo.ui.components.PageScaffold
 import com.tongxie.copilotgo.ui.components.ScreenState
 import com.tongxie.copilotgo.ui.components.UiAttachment
+import com.tongxie.copilotgo.ui.agent.AgentModeButton
+import com.tongxie.copilotgo.ui.agent.AgentRunDetailsDialog
+import com.tongxie.copilotgo.ui.agent.AgentToolbarActivity
+import com.tongxie.copilotgo.ui.agent.agentModelDisabledReason
+import com.tongxie.copilotgo.ui.agent.agentRunLabel
+import com.tongxie.copilotgo.ui.agent.agentCitationLinks
+import com.tongxie.copilotgo.ui.agent.blockedAgentReplayMessageIds
+import com.tongxie.copilotgo.ui.agent.rememberAgentSourceOpener
 import com.tongxie.copilotgo.ui.draft.ComposerDraft
 import com.tongxie.copilotgo.ui.draft.DraftLimits
 import com.tongxie.copilotgo.ui.files.exportShareIntent
@@ -428,10 +443,34 @@ fun ChatContent(
     onShare: (UiMessage) -> Unit,
     changingModel: Boolean = false,
     networkUnavailable: Boolean = false,
-    onNetworkSettings: (() -> Unit)? = null
+    onNetworkSettings: (() -> Unit)? = null,
+    agentChanging: Boolean = false,
+    onOpenAgentMode: (() -> Unit)? = null,
+    onAgentDecision: ((AgentApprovalBinding, AgentApprovalDecision) -> AgentApprovalResponse)? = null,
+    onOpenAgentSource: ((String) -> Unit)? = null
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val openSource = rememberAgentSourceOpener { feedback -> scope.launch { snackbar.showSnackbar(feedback) } }
+    var reviewedRunId by remember(session.id) { mutableStateOf<String?>(null) }
+    var reviewedApproval by remember(session.id) { mutableStateOf<AgentApprovalRequest?>(null) }
+    var answeredApproval by remember(session.id) { mutableStateOf<AgentApprovalBinding?>(null) }
+    var approvalError by remember(session.id) { mutableStateOf<String?>(null) }
+    val reviewedRun = session.messages.firstOrNull { it.agentRun?.id == reviewedRunId }?.agentRun
+    val activeRun = session.messages.lastOrNull { it.agentRun?.status?.isTerminal == false }?.agentRun
+    val replayBlockedIds = remember(session.revision, sending) {
+        if (sending) emptySet() else blockedAgentReplayMessageIds(session.messages)
+    }
+    fun reviewRun(run: AgentRunRecord) {
+        focus.clearFocus()
+        keyboard?.hide()
+        reviewedRunId = run.id
+        reviewedApproval = run.pendingApproval
+        approvalError = null
+    }
     var following by rememberSaveable(session.id) { mutableStateOf(true) }
     var initialized by rememberSaveable(session.id) { mutableStateOf(false) }
     var observedSend by rememberSaveable(session.id) { mutableStateOf(draft.acceptedSerial) }
@@ -442,8 +481,10 @@ fun ChatContent(
     val anchor = session.messages.size
     val currentAnchor by rememberUpdatedState(anchor)
     val model = catalog.models.firstOrNull { it.id == session.model }
+    val agentDisabledReason = if (session.agentSettings.enabled) agentModelDisabledReason(model) else null
     val images = draft.draft.attachments.any { it.kind == AttachmentKind.IMAGE }
-    val canSubmit = model?.chatCompatible == true && !changingModel && (!images || model.supportsVision)
+    val canSubmit = model?.chatCompatible == true && !changingModel && !agentChanging &&
+        agentDisabledReason == null && (!images || model.supportsVision)
     val attachmentItems = remember(draft.draft.attachments) {
         draft.draft.attachments.map { it.toUiAttachment(attachmentFile) }
     }
@@ -550,6 +591,17 @@ fun ChatContent(
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                         }
                     },
+                    actions = {
+                        if (activeRun != null) {
+                            AgentToolbarActivity(activeRun) { reviewRun(activeRun) }
+                        } else if (onOpenAgentMode != null) {
+                            AgentModeButton(
+                                enabled = session.agentSettings.enabled,
+                                onClick = onOpenAgentMode,
+                                interactive = !sending && !draft.submitting && !changingModel && !agentChanging
+                            )
+                        }
+                    },
                     windowInsets = systemInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
                 )
                 }
@@ -582,8 +634,11 @@ fun ChatContent(
                             supportingText = when {
                                 draft.loading -> stringResource(R.string.draft_loading)
                                 changingModel -> stringResource(R.string.model_changing)
+                                agentChanging -> stringResource(R.string.state_saving)
                                 model == null -> stringResource(R.string.chat_select_model)
-                                images && !canSubmit -> stringResource(R.string.chat_model_no_vision)
+                                agentDisabledReason != null -> stringResource(agentDisabledReason)
+                                images && !model.supportsVision -> stringResource(R.string.chat_model_no_vision)
+                                sending && activeRun != null -> stringResource(agentRunLabel(activeRun))
                                 sending -> stringResource(R.string.chat_draft_while_sending)
                                 else -> null
                             },
@@ -627,12 +682,20 @@ fun ChatContent(
                         )
                     }
                     if (error != null) {
+                        val canRetry = session.messages.lastOrNull { it.role == "assistant" }?.id !in replayBlockedIds
                         FeedbackBanner(
                             error,
                             isError = true,
-                            actionLabel = stringResource(R.string.chat_retry_last),
-                            onAction = if (sending) null else onRetry
+                            actionLabel = if (canRetry) stringResource(R.string.chat_retry_last) else null,
+                            onAction = if (sending || !canRetry) null else onRetry
                         )
+                        if (!canRetry) {
+                            Text(
+                                stringResource(R.string.agent_new_request_hint),
+                                Modifier.padding(horizontal = 16.dp),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         if (session.messages.isEmpty()) {
@@ -651,10 +714,20 @@ fun ChatContent(
                                 val attachments = remember(message.attachments) {
                                     message.attachments.map { it.toUiAttachment(attachmentFile) }
                                 }
+                                val citations = remember(
+                                    message.id, message.agentRun?.id, message.agentRun?.sources, session.messages.size
+                                ) {
+                                    if (message.agentRun == null) emptyMap()
+                                    else agentCitationLinks(session.messages, message.id)
+                                }
                                 MessageBubble(
                                     message = message,
                                     attachments = attachments,
                                     actionsEnabled = !sending && !draft.submitting,
+                                    replayBlocked = message.id in replayBlockedIds,
+                                    onReviewAgent = ::reviewRun,
+                                    onOpenAgentSource = onOpenAgentSource ?: openSource,
+                                    citationLinks = citations,
                                     onEdit = if (message.role == "user") ({ onEdit(message) }) else null,
                                     onRegenerate = if (message.role == "assistant") ({ onRegenerate(message) }) else null,
                                     onDelete = { onDelete(message) },
@@ -680,6 +753,42 @@ fun ChatContent(
                     }
                 }
             }
+        }
+    }
+    if (reviewedRunId != null) {
+        if (reviewedRun != null) {
+            AgentRunDetailsDialog(
+                run = reviewedRun,
+                reviewedApproval = reviewedApproval,
+                approvalBusy = reviewedApproval?.binding?.let { it == answeredApproval } == true,
+                approvalError = approvalError,
+                onReviewApproval = { request -> reviewedApproval = request; approvalError = null },
+                onDecision = { binding, decision ->
+                    val respond = onAgentDecision
+                    when {
+                        respond == null -> approvalError = context.getString(R.string.agent_approval_unavailable)
+                        binding == answeredApproval -> approvalError = context.getString(R.string.agent_approval_busy)
+                        else -> when (val response = respond(binding, decision)) {
+                            AgentApprovalResponse.Accepted -> { answeredApproval = binding; approvalError = null }
+                            is AgentApprovalResponse.Rejected -> approvalError = response.message
+                        }
+                    }
+                },
+                onStop = onStop,
+                onClose = { reviewedRunId = null; reviewedApproval = null; approvalError = null },
+                onOpenSource = onOpenAgentSource ?: openSource,
+                approvalsAvailable = onAgentDecision != null
+            )
+        } else {
+            AlertDialog(
+                onDismissRequest = { reviewedRunId = null; reviewedApproval = null },
+                text = { Text(stringResource(R.string.agent_run_missing)) },
+                confirmButton = {
+                    TextButton(onClick = { reviewedRunId = null; reviewedApproval = null }) {
+                        Text(stringResource(R.string.action_close))
+                    }
+                }
+            )
         }
     }
     preview?.let { AttachmentPreviewDialog(it) { preview = null } }

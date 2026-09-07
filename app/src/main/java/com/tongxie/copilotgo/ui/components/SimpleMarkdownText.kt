@@ -75,6 +75,8 @@ import com.tongxie.copilotgo.ui.markdown.LatexRender
 import com.tongxie.copilotgo.ui.markdown.MarkdownBlock
 import com.tongxie.copilotgo.ui.markdown.MarkdownInline
 import com.tongxie.copilotgo.ui.markdown.SafeMarkdownLink
+import com.tongxie.copilotgo.ui.markdown.LocalMarkdownCitations
+import com.tongxie.copilotgo.ui.markdown.resolveMarkdownCitations
 import com.tongxie.copilotgo.ui.markdown.TableAlignment
 import com.tongxie.copilotgo.ui.markdown.rememberLatexRender
 import com.tongxie.copilotgo.ui.markdown.rememberMarkdownDocument
@@ -255,6 +257,8 @@ private fun InlineText(
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
     val uriHandler = LocalUriHandler.current
+    val citations = LocalMarkdownCitations.current
+    val renderedParts = remember(parts, citations) { resolveMarkdownCitations(parts, citations) }
     val feedback by rememberUpdatedState(onFeedback)
     val linkStyles = remember(colors.primary, colors.secondaryContainer, colors.onSecondaryContainer) {
         TextLinkStyles(
@@ -264,7 +268,7 @@ private fun InlineText(
         )
     }
     val inlineImages = LinkedHashMap<String, InlineTextContent>()
-    parts.forEachIndexed { index, part ->
+    renderedParts.forEachIndexed { index, part ->
         if (part is MarkdownInline.Math) {
             val image = renders[part] as? LatexRender.Image
             if (image != null) {
@@ -285,9 +289,9 @@ private fun InlineText(
             }
         }
     }
-    val annotated = remember(parts, renders, colors, linkStyles, uriHandler) {
+    val annotated = remember(renderedParts, renders, colors, linkStyles, uriHandler) {
         buildAnnotatedString {
-            parts.forEachIndexed { index, part ->
+            renderedParts.forEachIndexed { index, part ->
                 when (part) {
                     is MarkdownInline.Math -> {
                         if (renders[part] is LatexRender.Image) {
