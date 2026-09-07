@@ -61,10 +61,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -111,6 +111,7 @@ import com.tongxie.copilotgo.ui.viewmodel.LibraryResult
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
 import com.tongxie.copilotgo.util.Logger
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import java.io.File
 
 @Composable
@@ -434,10 +435,12 @@ fun ChatContent(
     var following by rememberSaveable(session.id) { mutableStateOf(true) }
     var initialized by rememberSaveable(session.id) { mutableStateOf(false) }
     var observedSend by rememberSaveable(session.id) { mutableStateOf(draft.acceptedSerial) }
-    var programmaticScroll by remember { mutableStateOf(false) }
+    var explicitScrollPending by remember(session.id) { mutableStateOf(false) }
+    val scrollRequests = remember(listState, session.id) { Channel<Unit>(Channel.CONFLATED) }
     var preview by remember { mutableStateOf<UiAttachment?>(null) }
     val atLatest by remember { derivedStateOf { !listState.canScrollForward } }
     val anchor = session.messages.size
+    val currentAnchor by rememberUpdatedState(anchor)
     val model = catalog.models.firstOrNull { it.id == session.model }
     val images = draft.draft.attachments.any { it.kind == AttachmentKind.IMAGE }
     val canSubmit = model?.chatCompatible == true && !changingModel && (!images || model.supportsVision)
@@ -447,30 +450,39 @@ fun ChatContent(
     val scrollIntent = remember(listState, session.id) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (!programmaticScroll && available.y != 0f) following = false
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    following = false
+                    explicitScrollPending = false
+                }
                 return Offset.Zero
             }
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (!programmaticScroll && source == NestedScrollSource.UserInput && consumed.y != 0f) {
+                if (source == NestedScrollSource.UserInput && consumed.y != 0f) {
                     following = !listState.canScrollForward
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                if (!programmaticScroll) following = !listState.canScrollForward
+                if (!listState.canScrollForward) following = true
                 return Velocity.Zero
             }
         }
     }
 
-    suspend fun jumpToLatest() {
-        programmaticScroll = true
-        try {
-            listState.scrollToItem(anchor)
-        } finally {
-            programmaticScroll = false
+    DisposableEffect(scrollRequests) {
+        onDispose { scrollRequests.close() }
+    }
+    LaunchedEffect(listState, scrollRequests) {
+        for (request in scrollRequests) {
+            val explicit = explicitScrollPending
+            explicitScrollPending = false
+            if (following && (explicit || !listState.isScrollInProgress)) {
+                // One owner, and no concurrent AwaitFirstLayout continuations during first placement.
+                listState.requestScrollToItem(currentAnchor)
+                initialized = true
+            }
         }
     }
 
@@ -478,31 +490,39 @@ fun ChatContent(
         if (draft.acceptedSerial != observedSend) {
             observedSend = draft.acceptedSerial
             following = true
-            jumpToLatest()
+            explicitScrollPending = true
+            scrollRequests.trySend(Unit)
         }
     }
-    LaunchedEffect(session.id, session.messages.size) {
-        if (!initialized) {
-            if (following) jumpToLatest()
-            initialized = true
-        } else if (following && !listState.isScrollInProgress) {
-            jumpToLatest()
-        }
+    LaunchedEffect(session.id, anchor, following, session.messages.lastOrNull()?.content?.length) {
+        if (following) scrollRequests.trySend(Unit)
     }
-    LaunchedEffect(session.id, following, session.messages.lastOrNull()?.content?.length) {
-        if (following && !listState.isScrollInProgress) {
-            withFrameNanos { }
-            jumpToLatest()
-        }
-    }
-    LaunchedEffect(listState, following, anchor) {
-        if (following) {
-            snapshotFlow {
-                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                Triple(last?.index, last?.let { it.offset + it.size }, listState.layoutInfo.viewportEndOffset)
-            }.collect {
-                if (following && !listState.isScrollInProgress && listState.canScrollForward) jumpToLatest()
+    LaunchedEffect(listState, session.id) {
+        var previous: ChatViewport? = null
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            ChatViewport(
+                firstIndex = listState.firstVisibleItemIndex,
+                firstOffset = listState.firstVisibleItemScrollOffset,
+                lastItemEnd = layout.visibleItemsInfo.lastOrNull()?.let { it.offset + it.size },
+                itemCount = layout.totalItemsCount,
+                viewportEnd = layout.viewportEndOffset,
+                scrolling = listState.isScrollInProgress,
+                canScrollForward = listState.canScrollForward
+            )
+        }.collect { viewport ->
+            val before = previous
+            val movedEarlier = before != null && before.itemCount == viewport.itemCount &&
+                (viewport.firstIndex < before.firstIndex ||
+                    (viewport.firstIndex == before.firstIndex && viewport.firstOffset < before.firstOffset))
+            if (!explicitScrollPending && viewport.canScrollForward &&
+                ((viewport.scrolling && before?.scrolling != true) || movedEarlier)
+            ) {
+                following = false
             }
+            if (!viewport.scrolling && !viewport.canScrollForward && viewport.itemCount > 0) following = true
+            previous = viewport
+            if (following && !viewport.scrolling && viewport.canScrollForward) scrollRequests.trySend(Unit)
         }
     }
 
@@ -646,7 +666,11 @@ fun ChatContent(
                         }
                         if (initialized && !atLatest) {
                             FilledTonalButton(
-                                onClick = { following = true; scope.launch { jumpToLatest() } },
+                                onClick = {
+                                    following = true
+                                    explicitScrollPending = true
+                                    scrollRequests.trySend(Unit)
+                                },
                                 modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).testTag(ChatTags.LATEST)
                             ) {
                                 Icon(Icons.Default.ArrowDownward, contentDescription = null)
@@ -660,6 +684,16 @@ fun ChatContent(
     }
     preview?.let { AttachmentPreviewDialog(it) { preview = null } }
 }
+
+private data class ChatViewport(
+    val firstIndex: Int,
+    val firstOffset: Int,
+    val lastItemEnd: Int?,
+    val itemCount: Int,
+    val viewportEnd: Int,
+    val scrolling: Boolean,
+    val canScrollForward: Boolean
+)
 
 private fun AttachmentRef.toUiAttachment(resolve: (AttachmentRef) -> File): UiAttachment {
     val file = try {
