@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -34,7 +35,9 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -76,9 +79,11 @@ internal fun AgentRunIndicator(
 
 @Composable
 internal fun AgentToolbarActivity(run: AgentRunRecord, onReview: () -> Unit) {
+    val status = stringResource(agentRunLabel(run))
     TextButton(
         onClick = onReview,
-        modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(AgentTags.TOOLBAR_ACTIVITY)
+        modifier = Modifier.sizeIn(minHeight = 48.dp).semantics { stateDescription = status }
+            .testTag(AgentTags.TOOLBAR_ACTIVITY)
     ) {
         Text(
             stringResource(
@@ -136,11 +141,15 @@ internal fun AgentRunDetailsDialog(
     onOpenSource: (String) -> Unit,
     approvalsAvailable: Boolean = true
 ) {
+    val title = stringResource(R.string.agent_activity_title)
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Surface(
+            Modifier.fillMaxSize().semantics { paneTitle = title },
+            color = MaterialTheme.colorScheme.surface
+        ) {
             AgentRunDetailsContent(
                 run, reviewedApproval, approvalBusy, approvalError,
                 onReviewApproval, onDecision, onStop, onClose, onOpenSource, approvalsAvailable
@@ -163,6 +172,11 @@ internal fun AgentRunDetailsContent(
     approvalsAvailable: Boolean = true
 ) {
     val calls = remember(run.steps) { displayedAgentCalls(run) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(reviewedApproval?.binding) {
+        // This snapshot changes only when the user opens a review, not when a new proposal arrives.
+        if (reviewedApproval != null) listState.requestScrollToItem(1)
+    }
     PageScaffold(
         stringResource(R.string.agent_activity_title),
         onBack,
@@ -177,6 +191,7 @@ internal fun AgentRunDetailsContent(
     ) { pageModifier ->
         LazyColumn(
             pageModifier.testTag(AgentTags.DETAILS),
+            state = listState,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -314,6 +329,10 @@ internal fun AgentApprovalCard(
 
 @Composable
 private fun AgentCallDetails(call: AgentToolCallRecord) {
+    var expanded by remember(call.id) { mutableStateOf(false) }
+    val destination = remember(call.destination, expanded) {
+        agentTextPreview(call.destination, if (expanded) 2_048 else 256)
+    }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             agentTextPreview(call.name, 256).text,
@@ -324,19 +343,34 @@ private fun AgentCallDetails(call: AgentToolCallRecord) {
             stringResource(agentCallLabel(call)),
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                .testTag("agent-call-status-${call.id}")
         )
         if (call.destination.isNotBlank()) {
-            Text(agentTextPreview(call.destination, 2_048).text, style = MaterialTheme.typography.bodyMedium)
+            Text(destination.text, style = MaterialTheme.typography.bodyMedium)
+            if (destination.truncated) {
+                Text(stringResource(R.string.agent_destination_preview), style = MaterialTheme.typography.bodyMedium)
+            }
         }
-        call.arguments?.let { AgentArguments(it) }
-        call.result?.let { result ->
-            Text(
-                stringResource(if (result.isError) R.string.agent_tool_error else R.string.agent_tool_result),
-                style = MaterialTheme.typography.labelLarge
-            )
-            AgentPlainOutput(result.content)
-            if (result.truncated) {
-                Text(stringResource(R.string.agent_result_limited), style = MaterialTheme.typography.bodyMedium)
+        if (call.arguments != null || call.result != null || destination.truncated) {
+            TextButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
+                    .testTag("agent-call-details-${call.id}")
+            ) {
+                Text(stringResource(if (expanded) R.string.agent_call_collapse else R.string.agent_call_expand))
+            }
+        }
+        if (expanded) {
+            call.arguments?.let { AgentArguments(it) }
+            call.result?.let { result ->
+                Text(
+                    stringResource(if (result.isError) R.string.agent_tool_error else R.string.agent_tool_result),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                AgentPlainOutput(result.content)
+                if (result.truncated) {
+                    Text(stringResource(R.string.agent_result_limited), style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
         if (call.outcomeUnknown || call.result?.outcomeUnknown == true) {

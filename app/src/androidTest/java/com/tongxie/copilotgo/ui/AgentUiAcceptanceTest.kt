@@ -1,5 +1,8 @@
 package com.tongxie.copilotgo.ui
 
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.Intent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +25,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -42,14 +46,17 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.tongxie.copilotgo.R
 import com.tongxie.copilotgo.data.agent.AgentApprovalBinding
 import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
@@ -76,6 +83,7 @@ import com.tongxie.copilotgo.ui.agent.AgentRunDetailsContent
 import com.tongxie.copilotgo.ui.agent.AgentSourceRow
 import com.tongxie.copilotgo.ui.agent.AgentTags
 import com.tongxie.copilotgo.ui.agent.agentCitationLinks
+import com.tongxie.copilotgo.ui.agent.rememberAgentSourceOpener
 import com.tongxie.copilotgo.ui.components.ChatTags
 import com.tongxie.copilotgo.ui.components.MessageBubble
 import com.tongxie.copilotgo.ui.draft.ComposerDraft
@@ -84,6 +92,7 @@ import com.tongxie.copilotgo.ui.theme.CopilotGoTheme
 import com.tongxie.copilotgo.ui.viewmodel.DraftUiState
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -222,7 +231,9 @@ class AgentUiAcceptanceTest {
             }
         }
         rule.onNodeWithTag(AgentTags.DENY).performScrollTo().performClick()
-        rule.onNodeWithText(text(R.string.agent_call_denied)).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText(text(R.string.agent_call_denied)).performScrollTo()
+        saveSemantics("agent-denial")
+        rule.onNodeWithText(text(R.string.agent_call_denied)).assertIsDisplayed()
         rule.onNodeWithTag(AgentTags.APPROVE).performScrollTo().assertIsNotEnabled()
         rule.runOnIdle {
             assertEquals(listOf(AgentApprovalDecision.DENY), decisions)
@@ -300,6 +311,7 @@ class AgentUiAcceptanceTest {
 
     @Test fun inlineCitationOpensOnlyItsRealSourceAndCodeStaysLiteral() {
         val opened = mutableListOf<String>()
+        val sourceCardsOpened = mutableListOf<String>()
         val source = SourceReference("https://example.com/actual", "受控来源", SourceKind.FETCHED_PAGE, "S1")
         val message = UiMessage(
             "message", "assistant", "[S1]\n\n`[S1]`\n\n[S999]",
@@ -309,20 +321,71 @@ class AgentUiAcceptanceTest {
             override fun openUri(uri: String) { opened += uri }
         }
         rule.setContent {
-            FixtureTheme(fontScale = 1f) {
+            FixtureTheme {
                 CompositionLocalProvider(LocalUriHandler provides handler) {
                     Column(Modifier.verticalScroll(rememberScrollState())) {
-                        MessageBubble(message, citationLinks = agentCitationLinks(listOf(message), message.id))
+                        MessageBubble(
+                            message,
+                            citationLinks = agentCitationLinks(listOf(message), message.id),
+                            onOpenAgentSource = { sourceCardsOpened += it }
+                        )
                     }
                 }
             }
         }
-        rule.waitUntil(10_000) { rule.onAllNodesWithText("[S1]").fetchSemanticsNodes().size >= 2 }
-        rule.onAllNodesWithText("[S1]").onFirst().performScrollTo().performTouchInput { click(center) }
+        rule.waitUntil(10_000) { rule.onAllNodes(textOwner("[S1]", code = true)).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNode(textOwner("[S1]", code = false)).performScrollTo().assertIsDisplayed()
+        saveSemantics("agent-citation-before-link")
+        rule.onNode(textOwner("[S1]", code = false)).performTouchInput { click(center) }
         rule.runOnIdle { assertEquals(listOf(source.url), opened) }
-        rule.onAllNodesWithText("[S1]")[1].performScrollTo().performTouchInput { click(center) }
-        rule.onNodeWithText("[S999]").performScrollTo().performTouchInput { click(center) }
-        rule.runOnIdle { assertEquals(listOf(source.url), opened) }
+        rule.onNode(textOwner("[S1]", code = true)).performScrollTo().assertIsDisplayed()
+        assertNoLinkAnnotations("[S1]", code = true)
+        saveSemantics("agent-citation-before-code")
+        rule.onNode(textOwner("[S1]", code = true)).performTouchInput { click(center) }
+        rule.onNode(textOwner("[S999]", code = false)).performScrollTo().assertIsDisplayed()
+        assertNoLinkAnnotations("[S999]", code = false)
+        saveSemantics("agent-citation-before-unknown")
+        rule.onNode(textOwner("[S999]", code = false)).performTouchInput { click(center) }
+        saveSemantics("agent-citation-after-taps")
+        rule.runOnIdle {
+            assertEquals(listOf(source.url), opened)
+            assertTrue("Non-source text must not dispatch a source-card action", sourceCardsOpened.isEmpty())
+        }
+    }
+
+    @Test fun productionSourceHandlerDispatchesTheExactAndroidBrowserIntent() {
+        val intents = CopyOnWriteArrayList<Intent>()
+        val feedback = CopyOnWriteArrayList<String>()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val monitor = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.action != Intent.ACTION_VIEW) return null
+                intents += Intent(intent)
+                return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
+            }
+        }
+        val source = SourceReference(
+            "https://example.com/actual-source?fixture=one#section", "受控来源的原生浏览器操作",
+            SourceKind.FETCHED_PAGE, "S7", "actual-fixture-call"
+        )
+        instrumentation.addMonitor(monitor)
+        try {
+            rule.setContent {
+                FixtureTheme {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                        AgentSourceRow(source, rememberAgentSourceOpener { feedback += it })
+                    }
+                }
+            }
+            rule.onNodeWithTag("agent-source-S7").performScrollTo().performClick()
+            rule.waitUntil(5_000) { intents.isNotEmpty() }
+            assertEquals(1, intents.size)
+            assertEquals(Intent.ACTION_VIEW, intents.single().action)
+            assertEquals(source.url, intents.single().dataString)
+            assertTrue(feedback.isEmpty())
+        } finally {
+            instrumentation.removeMonitor(monitor)
+        }
     }
 
     @Test fun systemBackLeavesReviewWithoutCancellingTheRunOrClearingDraft() {
@@ -349,7 +412,7 @@ class AgentUiAcceptanceTest {
     @Test fun toolProgressAndCompletionRespectManualReadingPosition() {
         val session = mutableStateOf(chatSession(history = true))
         val sending = mutableStateOf(true)
-        rule.setContent { FixtureTheme(fontScale = 1f) { FixtureChat(session, sending) } }
+        rule.setContent { FixtureTheme { FixtureChat(session, sending) } }
         rule.waitForIdle()
         rule.onNodeWithTag(ChatTags.MESSAGES).performTouchInput { swipeDown() }
         rule.onNodeWithTag(ChatTags.LATEST).assertIsDisplayed()
@@ -442,6 +505,17 @@ class AgentUiAcceptanceTest {
 
     private fun text(id: Int, vararg arguments: Any): String = rule.activity.getString(id, *arguments)
 
+    private fun textOwner(value: String, code: Boolean): SemanticsMatcher = SemanticsMatcher(
+        "Text layout for $value with code=$code"
+    ) { node ->
+        node.config.contains(SemanticsActions.GetTextLayoutResult) &&
+            node.config.contains(SemanticsProperties.Text) &&
+            node.config[SemanticsProperties.Text].any { text ->
+                text.text == value &&
+                    text.spanStyles.any { it.item.fontFamily == FontFamily.Monospace } == code
+            }
+    }
+
     @Composable
     private fun FixtureTheme(dark: Boolean = false, fontScale: Float = 2f, content: @Composable () -> Unit) {
         val density = LocalDensity.current
@@ -458,5 +532,26 @@ class AgentUiAcceptanceTest {
         saveNativeScreenshotEvidence(rule.activity, directory, name) {
             rule.onRoot().captureToImage().asAndroidBitmap()
         }
+    }
+
+    private fun saveSemantics(name: String) {
+        val directory = File(rule.activity.getExternalFilesDir(null), "agent-acceptance")
+        assertTrue(directory.isDirectory || directory.mkdirs())
+        val textDetails = listOf("[S1]", "[S999]").flatMap { value ->
+            rule.onAllNodesWithText(value, useUnmergedTree = true).fetchSemanticsNodes().map { node ->
+                val text = if (node.config.contains(SemanticsProperties.Text)) node.config[SemanticsProperties.Text] else emptyList()
+                "text=$value; position=${node.positionInWindow}; size=${node.size}; bounds=${node.boundsInWindow}; " +
+                    "links=${text.flatMap { it.getLinkAnnotations(0, it.length) }}; spans=${text.flatMap { it.spanStyles }}"
+            }
+        }.joinToString("\n")
+        File(directory, "$name.txt").writeText(rule.onRoot(useUnmergedTree = true).printToString() + "\n\n" + textDetails)
+    }
+
+    private fun assertNoLinkAnnotations(value: String, code: Boolean) {
+        val node = rule.onNode(textOwner(value, code)).fetchSemanticsNode()
+        assertTrue(
+            "Literal text must not contain a URL annotation",
+            node.config[SemanticsProperties.Text].all { it.getLinkAnnotations(0, it.length).isEmpty() }
+        )
     }
 }

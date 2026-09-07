@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -67,11 +68,15 @@ internal fun AgentModeDialog(
     onOpenTools: () -> Unit,
     onClose: () -> Unit
 ) {
+    val title = stringResource(R.string.agent_mode_title)
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Surface(
+            Modifier.fillMaxSize().semantics { paneTitle = title },
+            color = MaterialTheme.colorScheme.surface
+        ) {
             AgentModeContent(
                 settings, model, providerDisclosure, publicWebReady, saving, error,
                 onSave, onOpenTools, onClose

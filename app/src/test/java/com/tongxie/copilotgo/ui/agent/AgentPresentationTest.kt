@@ -11,6 +11,7 @@ import com.tongxie.copilotgo.data.agent.AgentToolCallRecord
 import com.tongxie.copilotgo.data.agent.AgentToolCallStatus
 import com.tongxie.copilotgo.data.agent.AgentToolIdentity
 import com.tongxie.copilotgo.data.agent.AgentToolKind
+import com.tongxie.copilotgo.data.agent.AgentToolResult
 import com.tongxie.copilotgo.data.chat.ModelCapabilities
 import com.tongxie.copilotgo.data.chat.ModelInfo
 import com.tongxie.copilotgo.data.chat.ModelSupports
@@ -99,6 +100,9 @@ class AgentPresentationTest {
         assertEquals(R.string.agent_reading, agentCallLabel(call.copy(kind = AgentToolKind.PUBLIC_WEB_READ)))
         assertEquals(R.string.agent_call_denied, agentCallLabel(call.copy(status = AgentToolCallStatus.DENIED)))
         assertEquals(R.string.agent_outcome_unknown, agentCallLabel(call.copy(outcomeUnknown = true)))
+        assertEquals(R.string.agent_call_failed, agentCallLabel(call.copy(
+            status = AgentToolCallStatus.SUCCEEDED, result = AgentToolResult("controlled error", isError = true)
+        )))
         assertEquals("0.001", agentDurationSeconds(1))
         assertEquals("1.25", agentDurationSeconds(1_250))
         assertEquals("180", agentDurationSeconds(180_000))

@@ -41,4 +41,18 @@ class MarkdownCitationsTest {
         assertEquals(parts, resolved)
         assertNull((resolved.single() as MarkdownInline.Text).destination)
     }
+
+    @Test fun actualMarkdownParsingKeepsCodeAndUnknownReferencesUnlinked() {
+        val blocks = MarkdownParser().parse("[S1]\n\n`[S1]`\n\n[S999]").entries
+            .map { it.block as MarkdownBlock.Paragraph }
+        val resolved = blocks.map { block ->
+            resolveMarkdownCitations(block.content.flatMap { it.parts }, sources)
+                .filterIsInstance<MarkdownInline.Text>()
+        }
+        assertEquals(sources.getValue("S1"), resolved[0].single().destination)
+        assertEquals(setOf(InlineFormat.Code), resolved[1].single().formats)
+        assertNull(resolved[1].single().destination)
+        assertEquals("[S999]", resolved[2].single().text)
+        assertNull(resolved[2].single().destination)
+    }
 }
