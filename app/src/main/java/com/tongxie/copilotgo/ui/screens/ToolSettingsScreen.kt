@@ -48,7 +48,7 @@ fun ToolSettingsScreen(
     val discoveries by viewModel.discovery.collectAsStateWithLifecycle()
     val snapshot = settings.snapshot
     val working = ui.pending != null
-    val snackbar = rememberToolSettingsFeedback(ui.problem)
+    val snackbar = rememberToolSettingsFeedback(ui.problem, settings.problem)
     BackHandler(onBack = onBack)
 
     PageScaffold(stringResource(R.string.tool_settings_title), onBack, snackbar) { pageModifier ->

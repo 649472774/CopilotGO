@@ -18,6 +18,9 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
@@ -194,8 +197,22 @@ class AgentSettingsAcceptanceTest {
         fixture.vault.failWrites.set(false)
         storageRecoveryEvidence("tool-storage-before-retry-scroll", fixture)
         val readsBeforeRetry = fixture.vault.readCalls.get()
+        val blockingMessage = requireNotNull(fixture.store.state.value.problem).message
+        rule.onAllNodesWithText(blockingMessage).assertCountEquals(1)
         rule.onNodeWithText(text(R.string.tool_settings_retry)).performScrollTo()
             .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp)
+        val retry = rule.onNodeWithText(text(R.string.tool_settings_retry)).fetchSemanticsNode()
+        val retryBounds = Rect(
+            retry.positionInWindow.x, retry.positionInWindow.y,
+            retry.positionInWindow.x + retry.size.width, retry.positionInWindow.y + retry.size.height
+        )
+        val overlays = rule.onAllNodes(
+            SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss), useUnmergedTree = true
+        ).fetchSemanticsNodes()
+        assertTrue(
+            "A duplicate notification must not cover the recovery action",
+            overlays.none { it.layoutInfo.isPlaced && it.boundsInWindow.overlaps(retryBounds) }
+        )
         storageRecoveryEvidence("tool-storage-before-retry-click", fixture)
         rule.onNodeWithText(text(R.string.tool_settings_retry)).performClick()
         storageRecoveryEvidence("tool-storage-after-retry-click", fixture)
