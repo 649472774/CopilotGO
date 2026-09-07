@@ -55,6 +55,10 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets {
+        getByName("test").kotlin.directories += "src/sharedTest/java"
+        getByName("androidTest").kotlin.directories += "src/sharedTest/java"
+    }
     packaging {
         resources {
             excludes += setOf(
@@ -124,4 +128,6 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation(libs.mockwebserver)
+    androidTestImplementation(libs.okhttp.tls)
 }
