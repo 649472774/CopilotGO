@@ -43,7 +43,7 @@ class GoldenSessionMigrationInstrumentedTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
 
     @Test
-    fun preservedGoldenSessionsMigrateAndSurviveTwoReopens() = runBlocking {
+    fun preservedGoldenSessionsMigrateAndSurviveTwoReopens(): Unit = runBlocking {
         val arguments = InstrumentationRegistry.getArguments()
         val optIn = arguments.getString("goldenSessions")
         assumeTrue("Preserved golden-data acceptance requires explicit runner opt-in", optIn != null)
