@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -16,11 +18,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,9 +45,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -64,7 +70,7 @@ import com.tongxie.copilotgo.ui.settings.SettingsToggleRow
 import com.tongxie.copilotgo.ui.viewmodel.ProxyFormViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ProxyViewModel
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsProxyScreen(
     proxyVm: ProxyViewModel,
@@ -441,14 +447,26 @@ fun SettingsProxyScreen(
     }
 
     if (showLeaveDialog && !working) {
-        AlertDialog(
+        val maximumHeight = LocalConfiguration.current.screenHeightDp.dp * 0.9f
+        BasicAlertDialog(
             onDismissRequest = { if (!working) showLeaveDialog = false },
-            title = { Text(stringResource(R.string.settings_proxy_leave_title)) },
-            text = {
+            modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                tonalElevation = 6.dp
+            ) {
                 Column(
-                    Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    Modifier.heightIn(max = maximumHeight).verticalScroll(rememberScrollState()).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    Text(
+                        stringResource(R.string.settings_proxy_leave_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.semantics { heading() }
+                    )
                     Text(stringResource(R.string.settings_proxy_leave_description))
                     if (draft?.validation?.isValid == false) {
                         Text(stringResource(R.string.settings_proxy_fix_fields), color = MaterialTheme.colorScheme.error)
@@ -460,41 +478,39 @@ fun SettingsProxyScreen(
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                         )
                     }
-                }
-            },
-            confirmButton = {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TextButton(
-                        onClick = { showLeaveDialog = false },
-                        enabled = !working,
-                        modifier = Modifier.sizeIn(minHeight = 48.dp)
-                    ) { Text(stringResource(R.string.settings_proxy_continue_editing)) }
-                    TextButton(
-                        onClick = { formVm.save(proxyVm, leaveAfterSave = true) },
-                        enabled = inputsEnabled && form.dirty && draft?.validation?.isValid == true,
-                        modifier = Modifier.sizeIn(minHeight = 48.dp)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(stringResource(
-                            if (working) R.string.settings_saving else R.string.settings_proxy_save_and_leave
-                        ))
+                        TextButton(
+                            onClick = { showLeaveDialog = false },
+                            enabled = !working,
+                            modifier = Modifier.sizeIn(minHeight = 48.dp)
+                        ) { Text(stringResource(R.string.settings_proxy_continue_editing)) }
+                        TextButton(
+                            onClick = { formVm.save(proxyVm, leaveAfterSave = true) },
+                            enabled = inputsEnabled && form.dirty && draft?.validation?.isValid == true,
+                            modifier = Modifier.sizeIn(minHeight = 48.dp)
+                        ) {
+                            Text(stringResource(
+                                if (working) R.string.settings_saving else R.string.settings_proxy_save_and_leave
+                            ))
+                        }
+                        TextButton(
+                            onClick = {
+                                formVm.reset()
+                                proxyVm.cancelTest()
+                                showLeaveDialog = false
+                                onBack()
+                            },
+                            enabled = !working,
+                            modifier = Modifier.sizeIn(minHeight = 48.dp)
+                        ) { Text(stringResource(R.string.settings_proxy_discard)) }
                     }
-                    TextButton(
-                        onClick = {
-                            formVm.reset()
-                            proxyVm.cancelTest()
-                            showLeaveDialog = false
-                            onBack()
-                        },
-                        enabled = !working,
-                        modifier = Modifier.sizeIn(minHeight = 48.dp)
-                    ) { Text(stringResource(R.string.settings_proxy_discard)) }
                 }
             }
-        )
+        }
     }
 }
 
