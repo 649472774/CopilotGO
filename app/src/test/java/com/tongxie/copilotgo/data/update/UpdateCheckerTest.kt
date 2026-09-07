@@ -2,6 +2,7 @@ package com.tongxie.copilotgo.data.update
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class UpdateCheckerTest {
@@ -50,9 +51,31 @@ class UpdateCheckerTest {
     }
 
     @Test
-    fun compare_does_not_throw_on_malformed_segments() {
-        // Malformed parts are treated as 0, never throwing.
-        assertEquals(0, UpdateChecker.compareVersions("1.a.3", "1.0.3"))
-        assertTrue(UpdateChecker.compareVersions("1.2.x", "1.1.0") > 0)
+    fun compare_rejects_malformed_versions_instead_of_inventing_zero_segments() {
+        assertThrows(IllegalArgumentException::class.java) { UpdateChecker.compareVersions("1.a.3", "1.0.3") }
+        assertThrows(IllegalArgumentException::class.java) { UpdateChecker.compareVersions("", "1.0.0") }
+        assertThrows(IllegalArgumentException::class.java) { UpdateChecker.compareVersions("release", "1.0.0") }
+    }
+
+    @Test
+    fun prerelease_numbers_and_build_metadata_follow_semantic_ordering() {
+        assertTrue(UpdateChecker.compareVersions("1.0.0-beta.10", "1.0.0-beta.2") > 0)
+        assertTrue(UpdateChecker.compareVersions("1.0.0-2", "1.0.0-beta") < 0)
+        assertEquals(0, UpdateChecker.compareVersions("1.0.0+build.9", "1.0.0+build.10"))
+        assertTrue(UpdateChecker.compareVersions("99999999999999999.0.0", "2.0.0") > 0)
+    }
+
+    @Test
+    fun checksum_selects_exact_filename_and_rejects_ambiguous_records() {
+        val hash = "a".repeat(64)
+        assertEquals(hash, UpdateChecker.parseChecksum("$hash  other.apk\n$hash *app.apk\n", "app.apk"))
+        assertEquals(hash, UpdateChecker.parseChecksum(hash.uppercase(), "app.apk"))
+        assertThrows(UpdateException::class.java) {
+            UpdateChecker.parseChecksum("$hash  app.apk\n$hash  app.apk", "app.apk")
+        }
+        assertThrows(UpdateException::class.java) {
+            UpdateChecker.parseChecksum("$hash  other.apk", "app.apk")
+        }
+        assertThrows(UpdateException::class.java) { UpdateChecker.requireSha256("a".repeat(63)) }
     }
 }

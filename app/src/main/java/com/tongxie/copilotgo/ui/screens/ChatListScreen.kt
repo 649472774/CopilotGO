@@ -1,22 +1,31 @@
 package com.tongxie.copilotgo.ui.screens
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -25,355 +34,378 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Surface
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.tongxie.copilotgo.data.chat.Session
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.data.chat.SessionSummary
+import com.tongxie.copilotgo.ui.components.ConfirmActionDialog
+import com.tongxie.copilotgo.ui.components.FeedbackBanner
+import com.tongxie.copilotgo.ui.components.ScreenState
+import com.tongxie.copilotgo.ui.components.SessionListRow
 import com.tongxie.copilotgo.ui.components.UpdateDialog
+import com.tongxie.copilotgo.ui.files.exportShareIntent
+import com.tongxie.copilotgo.ui.viewmodel.LibraryFilesViewModel
+import com.tongxie.copilotgo.ui.viewmodel.LibraryResult
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
 import com.tongxie.copilotgo.ui.viewmodel.UpdateViewModel
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatListScreen(
     viewModel: SessionListViewModel,
     updateVm: UpdateViewModel,
+    filesVm: LibraryFilesViewModel,
     onOpen: (String) -> Unit,
     onSettings: () -> Unit,
     onFiles: () -> Unit,
     onRemote: () -> Unit
 ) {
-    val sessions by viewModel.sessions.collectAsState()
+    val sessions by filesVm.summaries.collectAsStateWithLifecycle()
+    val loading by viewModel.loading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val busy by filesVm.busy.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val fmt = remember { SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()) }
     val context = LocalContext.current
-    var searchVisible by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var renameTarget by remember { mutableStateOf<Session?>(null) }
-    var renameText by remember { mutableStateOf("") }
-    val filteredSessions = remember(sessions, searchQuery) {
-        val q = searchQuery.trim()
-        if (q.isBlank()) sessions else sessions.filter { it.title.contains(q, ignoreCase = true) }
-    }
+    val snackbar = remember { SnackbarHostState() }
+    var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteTitle by rememberSaveable { mutableStateOf("") }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+    var renameId by rememberSaveable { mutableStateOf<String?>(null) }
+    var renameText by rememberSaveable { mutableStateOf("") }
+    var renameError by remember { mutableStateOf<String?>(null) }
 
-    val updateState by updateVm.state.collectAsState()
+    val updateState by updateVm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { updateVm.autoCheckOnce() }
     UpdateDialog(state = updateState, vm = updateVm)
 
-    renameTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { renameTarget = null },
-            title = { Text("重命名会话") },
-            text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    label = { Text("标题") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.rename(target.id, renameText)
-                    renameTarget = null
-                }) {
-                    Text("确定")
+    SessionListContent(
+        sessions = sessions,
+        loading = loading,
+        error = error,
+        busy = busy,
+        snackbar = snackbar,
+        onOpen = onOpen,
+        onReload = viewModel::reload,
+        onSettings = onSettings,
+        onFiles = onFiles,
+        onRemote = onRemote,
+        onNew = {
+            scope.launch {
+                when (val result = filesVm.createSession { viewModel.createNew() }) {
+                    is LibraryResult.Success -> onOpen(result.value.id)
+                    is LibraryResult.Failure -> snackbar.showSnackbar(result.message)
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { renameTarget = null }) {
-                    Text("取消")
+            }
+        },
+        onTogglePin = { session ->
+            scope.launch {
+                val result = filesVm.setPinned(session.id, !session.pinned)
+                if (result is LibraryResult.Failure) snackbar.showSnackbar(result.message)
+            }
+        },
+        onRename = { renameId = it.id; renameText = it.title; renameError = null },
+        onDeleteRequest = { deleteId = it.id; deleteTitle = it.title; deleteError = null },
+        onShare = { session ->
+            scope.launch {
+                when (val result = filesVm.exportSession(session.id)) {
+                    is LibraryResult.Success -> try {
+                        context.startActivity(Intent.createChooser(
+                            exportShareIntent(context, result.value),
+                            context.getString(R.string.export_chooser)
+                        ))
+                    } catch (_: ActivityNotFoundException) {
+                        snackbar.showSnackbar(context.getString(R.string.export_no_app))
+                    }
+                    is LibraryResult.Failure -> snackbar.showSnackbar(result.message)
+                }
+            }
+        }
+    )
+
+    deleteId?.let { id ->
+        ConfirmActionDialog(
+            title = stringResource(R.string.session_delete_title),
+            description = stringResource(R.string.session_delete_warning, deleteTitle),
+            confirmLabel = stringResource(R.string.action_delete),
+            busy = busy,
+            error = deleteError,
+            onDismiss = { deleteId = null },
+            onConfirm = {
+                scope.launch {
+                    when (val result = filesVm.deleteSession(id)) {
+                        is LibraryResult.Success -> {
+                            deleteId = null
+                            result.warning?.let { snackbar.showSnackbar(it, withDismissAction = true) }
+                        }
+                        is LibraryResult.Failure -> {
+                            if (deleteId == id) deleteError = result.message else snackbar.showSnackbar(result.message)
+                        }
+                    }
                 }
             }
         )
     }
-
-    Scaffold(
-        topBar = {
-            Column {
-                TopAppBar(
-                    title = { Text("CopilotGo") },
-                    actions = {
-                        IconButton(onClick = {
-                            searchVisible = !searchVisible
-                            if (!searchVisible) searchQuery = ""
-                        }) {
-                            Icon(
-                                if (searchVisible) Icons.Default.Close else Icons.Default.Search,
-                                contentDescription = if (searchVisible) "关闭搜索" else "搜索"
-                            )
-                        }
-                        IconButton(onClick = onRemote) {
-                            Icon(Icons.Default.Cloud, contentDescription = "Remote 网页版")
-                        }
-                        IconButton(onClick = onFiles) {
-                            Icon(Icons.Default.Folder, contentDescription = "文件")
-                        }
-                        IconButton(onClick = onSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = "设置")
+    renameId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { renameId = null },
+            title = { Text(stringResource(R.string.session_rename)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = {
+                            if (it.length <= 120) {
+                                renameText = it
+                                renameError = null
+                            } else {
+                                renameError = context.getString(R.string.session_title_limit)
+                            }
+                        },
+                        enabled = !busy,
+                        label = { Text(stringResource(R.string.session_title)) },
+                        isError = renameText.isBlank() || renameText.length > 120,
+                        supportingText = { Text(stringResource(R.string.session_title_limit)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 3
+                    )
+                    renameError?.let { Text(it, color = androidx.compose.material3.MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy && renameText.isNotBlank() && renameText.length <= 120,
+                    onClick = {
+                        scope.launch {
+                            when (val result = filesVm.renameSession(id, renameText)) {
+                                is LibraryResult.Success -> renameId = null
+                                is LibraryResult.Failure -> {
+                                    if (renameId == id) renameError = result.message else snackbar.showSnackbar(result.message)
+                                }
+                            }
                         }
                     }
-                )
-                if (searchVisible) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索会话标题") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
+                ) { Text(stringResource(if (busy) R.string.state_saving else R.string.action_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameId = null }) {
+                    Text(stringResource(if (busy) R.string.action_close else R.string.action_cancel))
                 }
             }
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = {
-                scope.launch {
-                    val s = viewModel.createNew()
-                    onOpen(s.id)
-                }
-            }) {
-                Icon(Icons.Default.Add, contentDescription = "新建")
-            }
-        }
-    ) { padding ->
-        if (sessions.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "还没有会话，点右下角 + 新建",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
-        } else if (filteredSessions.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "没有匹配的会话",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
-        } else {
-            LazyColumn(modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)) {
-                items(filteredSessions, key = { it.id }) { s ->
-                    SessionRow(
-                        session = s,
-                        fmt = fmt,
-                        onOpen = { onOpen(s.id) },
-                        onTogglePin = { viewModel.togglePin(s.id) },
-                        onRename = {
-                            renameTarget = s
-                            renameText = s.title
-                        },
-                        onShare = {
-                            shareSession(context, s)
-                        },
-                        onDelete = { viewModel.delete(s.id) }
-                    )
-                    HorizontalDivider()
-                }
-            }
-        }
+        )
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SessionRow(
-    session: Session,
-    fmt: SimpleDateFormat,
-    onOpen: () -> Unit,
-    onTogglePin: () -> Unit,
-    onRename: () -> Unit,
-    onShare: () -> Unit,
-    onDelete: () -> Unit
+fun SessionListContent(
+    sessions: List<SessionSummary>,
+    loading: Boolean,
+    error: String?,
+    busy: Boolean,
+    snackbar: SnackbarHostState,
+    onOpen: (String) -> Unit,
+    onReload: () -> Unit,
+    onNew: () -> Unit,
+    onSettings: () -> Unit,
+    onFiles: () -> Unit,
+    onRemote: () -> Unit,
+    onTogglePin: (SessionSummary) -> Unit,
+    onRename: (SessionSummary) -> Unit,
+    onShare: (SessionSummary) -> Unit,
+    onDeleteRequest: (SessionSummary) -> Unit
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
-                true
-            } else {
-                false
-            }
-        },
-        positionalThreshold = { distance -> distance * 0.5f }
-    )
-
-    SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        backgroundContent = {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.error)
-                    .padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterEnd
-            ) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "滑动删除",
-                    tint = MaterialTheme.colorScheme.onError
-                )
-            }
-        }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .clickable { onOpen() }
-                .padding(16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (session.pinned) {
-                        Text(
-                            "📌",
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(end = 6.dp)
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    var search by rememberSaveable { mutableStateOf("") }
+    var searchLimitReached by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    val filtered = remember(sessions, search) {
+        val query = search.trim()
+        if (query.isEmpty()) sessions else sessions.filter { it.title.contains(query, ignoreCase = true) }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val expanded = maxWidth >= 840.dp
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            topBar = {
+                Column {
+                    TopAppBar(
+                        title = { Text("CopilotGo", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                        actions = {
+                            IconButton(onClick = {
+                                searchVisible = !searchVisible
+                                if (!searchVisible) search = ""
+                            }) {
+                                Icon(
+                                    if (searchVisible) Icons.Default.Close else Icons.Default.Search,
+                                    stringResource(if (searchVisible) R.string.session_search_close else R.string.session_search)
+                                )
+                            }
+                            if (!expanded) {
+                                Box {
+                                    IconButton(onClick = { menu = true }) {
+                                        Icon(Icons.Default.MoreVert, stringResource(R.string.app_menu))
+                                    }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.remote_title)) },
+                                            leadingIcon = { Icon(Icons.Default.Cloud, null) },
+                                            onClick = { menu = false; onRemote() }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.files_title)) },
+                                            leadingIcon = { Icon(Icons.Default.Folder, null) },
+                                            onClick = { menu = false; onFiles() }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.settings_title)) },
+                                            leadingIcon = { Icon(Icons.Default.Settings, null) },
+                                            onClick = { menu = false; onSettings() }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    if (searchVisible) {
+                        OutlinedTextField(
+                            value = search,
+                            onValueChange = {
+                                searchLimitReached = it.length > 256
+                                if (!searchLimitReached) search = it
+                            },
+                            singleLine = true,
+                            isError = searchLimitReached,
+                            supportingText = if (searchLimitReached) ({ Text(stringResource(R.string.search_limit)) }) else null,
+                            label = { Text(stringResource(R.string.session_search_hint)) },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                                .testTag("session_search")
                         )
                     }
-                    Text(
-                        session.title.ifBlank { "未命名会话" },
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
+                }
+            },
+            snackbarHost = { SnackbarHost(snackbar) },
+            floatingActionButton = {
+                if (busy) {
+                    Surface(
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = androidx.compose.material3.MaterialTheme.shapes.large
+                    ) {
+                        Text(stringResource(R.string.library_working), Modifier.padding(16.dp))
+                    }
+                } else {
+                    ExtendedFloatingActionButton(
+                        onClick = onNew,
+                        icon = { Icon(Icons.Default.Add, null) },
+                        text = { Text(stringResource(R.string.chat_new)) },
+                        modifier = Modifier.testTag("new_session")
                     )
                 }
-                Box {
-                    IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(if (session.pinned) "取消置顶" else "置顶") },
-                            onClick = {
-                                menuExpanded = false
-                                onTogglePin()
-                            }
+            }
+        ) { padding ->
+            Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                if (expanded) {
+                    NavigationRail(Modifier.verticalScroll(rememberScrollState())) {
+                        NavigationRailItem(
+                            selected = true,
+                            onClick = { search = ""; searchVisible = false },
+                            icon = { Icon(Icons.Default.ChatBubbleOutline, null) },
+                            label = { Text(stringResource(R.string.chat_title)) }
                         )
-                        DropdownMenuItem(
-                            text = { Text("重命名") },
-                            onClick = {
-                                menuExpanded = false
-                                onRename()
-                            }
+                        NavigationRailItem(
+                            selected = false,
+                            onClick = onRemote,
+                            icon = { Icon(Icons.Default.Cloud, null) },
+                            label = { Text(stringResource(R.string.remote_short_title)) }
                         )
-                        DropdownMenuItem(
-                            text = { Text("导出/分享") },
-                            onClick = {
-                                menuExpanded = false
-                                onShare()
-                            }
+                        NavigationRailItem(
+                            selected = false,
+                            onClick = onFiles,
+                            icon = { Icon(Icons.Default.Folder, null) },
+                            label = { Text(stringResource(R.string.files_title)) }
                         )
-                        DropdownMenuItem(
-                            text = { Text("删除") },
-                            onClick = {
-                                menuExpanded = false
-                                onDelete()
-                            }
+                        NavigationRailItem(
+                            selected = false,
+                            onClick = onSettings,
+                            icon = { Icon(Icons.Default.Settings, null) },
+                            label = { Text(stringResource(R.string.settings_title)) }
                         )
                     }
                 }
-            }
-            Row(
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    session.model,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    fmt.format(Date(session.updatedAt)),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
+                Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                    Column(Modifier.widthIn(max = 960.dp).fillMaxSize()) {
+                        if (loading && sessions.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        error?.let {
+                            FeedbackBanner(it, isError = true, actionLabel = stringResource(R.string.action_retry), onAction = onReload)
+                        }
+                        when {
+                            loading && sessions.isEmpty() -> ScreenState(
+                                stringResource(R.string.session_loading),
+                                Modifier.fillMaxSize(),
+                                loading = true
+                            )
+                            sessions.isEmpty() && error == null -> ScreenState(
+                                stringResource(R.string.session_empty_title),
+                                Modifier.fillMaxSize().padding(bottom = 88.dp),
+                                detail = stringResource(R.string.session_empty_hint)
+                            )
+                            filtered.isEmpty() && sessions.isNotEmpty() -> ScreenState(
+                                stringResource(R.string.session_no_match),
+                                Modifier.fillMaxSize(),
+                                actionLabel = stringResource(R.string.session_search_clear),
+                                onAction = { search = "" }
+                            )
+                            else -> LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(bottom = 96.dp)
+                            ) {
+                                items(filtered, key = { it.id }, contentType = { "session" }) { session ->
+                                    SessionListRow(
+                                        session,
+                                        enabled = !busy,
+                                        onOpen = { onOpen(session.id) },
+                                        onTogglePin = { onTogglePin(session) },
+                                        onRename = { onRename(session) },
+                                        onShare = { onShare(session) },
+                                        onDeleteRequest = { onDeleteRequest(session) }
+                                    )
+                                    HorizontalDivider()
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
-
-private fun shareSession(context: android.content.Context, session: Session) {
-    val sendIntent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, session.title.ifBlank { "CopilotGo 会话" })
-        putExtra(Intent.EXTRA_TEXT, session.toMarkdown())
-    }
-    val chooser = Intent.createChooser(sendIntent, "分享会话").apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    context.startActivity(chooser)
-}
-
-private fun Session.toMarkdown(): String = buildString {
-    append("# ")
-    append(title.ifBlank { "未命名会话" })
-    append("\n\n")
-    messages.forEach { message ->
-        val role = when (message.role) {
-            "user" -> "我"
-            "assistant" -> "Copilot"
-            else -> message.role.ifBlank { "消息" }
-        }
-        append("**")
-        append(role)
-        append(":**\n\n")
-        append(message.content)
-        append("\n\n")
-    }
-}
-
