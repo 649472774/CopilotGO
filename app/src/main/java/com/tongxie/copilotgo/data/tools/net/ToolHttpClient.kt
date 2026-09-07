@@ -296,7 +296,7 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
         return Request.Builder().url(url).method(original.method, original.body?.let(::OneShotToolBody)).apply {
             original.headers.forEach { (name, value) ->
                 val lower = name.lowercase(Locale.ROOT)
-                if (lower !in FORBIDDEN_HEADERS && FORBIDDEN_PREFIXES.none(lower::startsWith) &&
+                if (acceptsExplicitHeader(lower) &&
                     (hasCredentials || lower in PUBLIC_HEADERS || lower.startsWith("mcp-param-"))
                 ) addHeader(name, value)
             }
@@ -310,19 +310,24 @@ class ToolHttpClient(private val provider: HttpClientProvider) {
     private fun boundedTimeout(configured: Int, remaining: Long): Long =
         if (configured == 0) remaining else minOf(configured.toLong(), remaining)
 
-    private companion object {
-        val ABSOLUTE_REFERENCE = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
-        val PUBLIC_HEADERS = setOf(
+    companion object {
+        internal fun acceptsExplicitHeader(name: String): Boolean {
+            val lower = name.lowercase(Locale.ROOT)
+            return lower !in FORBIDDEN_HEADERS && FORBIDDEN_PREFIXES.none(lower::startsWith)
+        }
+
+        private val ABSOLUTE_REFERENCE = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
+        private val PUBLIC_HEADERS = setOf(
             "accept", "accept-language", "content-type", "mcp-protocol-version", "mcp-method", "mcp-name"
         )
-        val FORBIDDEN_HEADERS = setOf(
+        private val FORBIDDEN_HEADERS = setOf(
             "cookie", "cookie2", "proxy-authorization", "proxy-authenticate", "host", "connection",
             "proxy-connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade",
             "expect", "accept-encoding", "content-length", "user-agent", "referer", "origin",
             "cache-control", "editor-version", "editor-plugin-version", "x-request-id",
             "x-initiator", "x-session-id", "x-client-id"
         )
-        val FORBIDDEN_PREFIXES = setOf("github-", "x-github-", "copilot-", "x-copilot-", "vscode-", "openai-")
+        private val FORBIDDEN_PREFIXES = setOf("github-", "x-github-", "copilot-", "x-copilot-", "vscode-", "openai-")
     }
 }
 

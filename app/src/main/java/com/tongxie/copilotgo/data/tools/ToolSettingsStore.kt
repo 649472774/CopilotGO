@@ -5,6 +5,7 @@ import com.tongxie.copilotgo.data.storage.CredentialVault
 import com.tongxie.copilotgo.data.storage.SecretVault
 import com.tongxie.copilotgo.data.tools.net.ToolNetworkPolicy
 import com.tongxie.copilotgo.data.tools.net.ToolNetworkException
+import com.tongxie.copilotgo.data.tools.net.ToolHttpClient
 import com.tongxie.copilotgo.data.tools.net.ToolUrlGuard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -409,6 +410,7 @@ class ToolSettingsStore(
             val normalized = name.trim()
             val lower = normalized.lowercase()
             if (normalized.length !in 1..64 || !normalized.matches(HEADER_NAME) ||
+                !ToolHttpClient.acceptsExplicitHeader(normalized) ||
                 lower in RESERVED_HEADERS || lower.startsWith("proxy-") ||
                 lower.startsWith("mcp-") || lower.startsWith("sec-")
             ) {

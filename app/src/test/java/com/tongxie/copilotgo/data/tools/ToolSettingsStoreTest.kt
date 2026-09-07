@@ -57,6 +57,17 @@ class ToolSettingsStoreTest {
                 lease.authorize(Request.Builder().url("https://other.example/mcp"))
             }
         }
+        val custom = store.saveServer(
+            null, null,
+            authenticatedDraft().copy(authMode = McpAuthMode.CUSTOM_HEADER, authHeaderName = "X-Fixture-Key"),
+            CredentialUpdate.Replace("fixture-custom-secret")
+        )
+        store.withServer(custom.id, custom.revision) { lease ->
+            val request = Request.Builder().url(custom.endpoint)
+            lease.authorize(request)
+            assertEquals("fixture-custom-secret", request.build().header("X-Fixture-Key"))
+            assertNull(request.build().header("Authorization"))
+        }
     }
 
     @Test
@@ -216,7 +227,10 @@ class ToolSettingsStoreTest {
         expectProblem(ToolProblemCode.INVALID_CONFIGURATION) {
             store.saveServer(null, null, McpServerDraft("bad", "https://example.com/mcp?api_key=fixture-secret"))
         }
-        listOf("Host", "Cookie", "Mcp-Name", "Proxy-Authorization", "Authorization", "bad\r\nHeader").forEach { name ->
+        listOf(
+            "Host", "Cookie", "Cookie2", "Mcp-Name", "Proxy-Authorization", "Authorization",
+            "Editor-Version", "X-Request-Id", "X-Copilot-Key", "OpenAI-Api-Key", "bad\r\nHeader"
+        ).forEach { name ->
             expectProblem(ToolProblemCode.INVALID_CONFIGURATION) {
                 store.saveServer(
                     null, null,
