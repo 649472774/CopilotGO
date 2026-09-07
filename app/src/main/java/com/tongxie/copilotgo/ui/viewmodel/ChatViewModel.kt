@@ -3,6 +3,9 @@ package com.tongxie.copilotgo.ui.viewmodel
 import android.content.ContentResolver
 import android.net.Uri
 import androidx.lifecycle.ViewModel
+import com.tongxie.copilotgo.data.agent.AgentApprovalBinding
+import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
+import com.tongxie.copilotgo.data.agent.AgentSessionSettings
 import com.tongxie.copilotgo.data.chat.AttachmentRef
 import com.tongxie.copilotgo.data.chat.ChatStreamCenter
 import com.tongxie.copilotgo.data.chat.SendResult
@@ -22,14 +25,22 @@ class ChatViewModel(
     fun reload() = center.reload(sessionId)
     fun setModel(model: String) = center.setModel(sessionId, model)
     suspend fun setModelAndAwait(model: String) = center.setModelAndAwait(sessionId, model)
+    suspend fun setAgentSettingsAndAwait(
+        settings: AgentSessionSettings,
+        expectedSettings: AgentSessionSettings? = null
+    ) = center.setAgentSettingsAndAwait(sessionId, settings, expectedSettings)
+
+    fun respondToApproval(binding: AgentApprovalBinding, decision: AgentApprovalDecision) =
+        center.respondToApproval(sessionId, binding, decision)
 
     suspend fun submit(
         text: String,
         attachments: List<String> = emptyList(),
         imageUrls: List<String> = emptyList(),
         attachmentRefs: List<AttachmentRef> = emptyList(),
-        submissionId: String? = null
-    ): SendResult = center.submit(sessionId, text, attachments, imageUrls, attachmentRefs, submissionId)
+        submissionId: String? = null,
+        agentSettings: AgentSessionSettings? = null
+    ): SendResult = center.submit(sessionId, text, attachments, imageUrls, attachmentRefs, submissionId, agentSettings)
 
     fun send(text: String, attachments: List<String> = emptyList(), imageUrls: List<String> = emptyList()) =
         center.send(sessionId, text, attachments, imageUrls)

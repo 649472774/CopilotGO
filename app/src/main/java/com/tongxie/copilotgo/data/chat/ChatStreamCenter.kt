@@ -3,6 +3,20 @@ package com.tongxie.copilotgo.data.chat
 import android.content.ContentResolver
 import android.net.Uri
 import com.tongxie.copilotgo.data.Constants
+import com.tongxie.copilotgo.data.agent.AgentApprovalBinding
+import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
+import com.tongxie.copilotgo.data.agent.AgentApprovalRequest
+import com.tongxie.copilotgo.data.agent.AgentApprovalResponse
+import com.tongxie.copilotgo.data.agent.AgentContextLimitException
+import com.tongxie.copilotgo.data.agent.AgentPromptBuilder
+import com.tongxie.copilotgo.data.agent.AgentRunCallbacks
+import com.tongxie.copilotgo.data.agent.AgentRunInput
+import com.tongxie.copilotgo.data.agent.AgentRunRecord
+import com.tongxie.copilotgo.data.agent.AgentRunStatus
+import com.tongxie.copilotgo.data.agent.AgentRunner
+import com.tongxie.copilotgo.data.agent.AgentSessionSettings
+import com.tongxie.copilotgo.data.agent.detached
+import com.tongxie.copilotgo.data.agent.interrupt
 import com.tongxie.copilotgo.data.net.networkErrorMessage
 import com.tongxie.copilotgo.data.storage.AttachmentImportException
 import com.tongxie.copilotgo.data.storage.AttachmentStore
@@ -34,11 +48,13 @@ class ChatStreamCenter(
     private val chatClient: CopilotChatClient,
     private val catalog: ModelCatalog = chatClient.modelCatalog,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
-    private val maxInactiveSessions: Int = 8
+    private val maxInactiveSessions: Int = 8,
+    private val agentRunner: AgentRunner? = null
 ) {
     private val guard = Any()
     private val slots = LinkedHashMap<String, Slot>(16, 0.75f, true)
     private val promptBuilder = PromptBuilder(store.attachments)
+    private val agentPromptBuilder = AgentPromptBuilder(store.attachments)
     private val deletionListener: (String) -> Unit = { stop(it) }
     private var accountGeneration = chatClient.accountGeneration.value
 
@@ -53,6 +69,12 @@ class ChatStreamCenter(
     private class Ticket(val accountGeneration: Long) {
         var job: Job? = null
         var stopRequested = false
+        var agentRunId: String? = null
+        var pendingApproval: PendingApproval? = null
+    }
+
+    private class PendingApproval(val request: AgentApprovalRequest) {
+        val decision = CompletableDeferred<AgentApprovalDecision>()
     }
 
     private sealed interface Request {
@@ -61,7 +83,8 @@ class ChatStreamCenter(
             val attachments: List<String>,
             val imageUrls: List<String>,
             val refs: List<AttachmentRef>,
-            val submissionId: String?
+            val submissionId: String?,
+            val agentSettings: AgentSessionSettings?
         ) : Request
         data class Regenerate(val assistantId: String) : Request
         data class Edit(val userId: String, val text: String) : Request
@@ -131,9 +154,10 @@ class ChatStreamCenter(
         attachments: List<String> = emptyList(),
         imageUrls: List<String> = emptyList(),
         attachmentRefs: List<AttachmentRef> = emptyList(),
-        submissionId: String? = null
+        submissionId: String? = null,
+        agentSettings: AgentSessionSettings? = null
     ): SendResult = launchRequest(id, Request.New(
-        text, attachments.toList(), imageUrls.toList(), attachmentRefs.toList(), submissionId
+        text, attachments.toList(), imageUrls.toList(), attachmentRefs.toList(), submissionId, agentSettings
     ))
 
     fun send(id: String, text: String, attachments: List<String> = emptyList(), imageUrls: List<String> = emptyList()) {
@@ -179,17 +203,35 @@ class ChatStreamCenter(
                 val needsVision = history.any { message ->
                     message.imageUrls.isNotEmpty() || message.attachments.any { it.kind == AttachmentKind.IMAGE }
                 }
-                val model = catalog.requireModel(original.model, original.model.isBlank() && needsVision)
-                val prompt = promptBuilder.prepare(history, model)
+                if (request is Request.New && request.agentSettings != null &&
+                    request.agentSettings != original.agentSettings
+                ) throw ModelUnavailableException("Agent 设置已更新，请刷新后重新发送；草稿已保留")
+                val settings = original.agentSettings
+                if (settings.enabled && agentRunner == null) {
+                    throw ModelUnavailableException("当前安装尚未配置 Agent 工具运行时，请关闭 Agent 模式后聊天")
+                }
+                val model = catalog.requireModel(
+                    original.model, original.model.isBlank() && needsVision, needsTools = settings.enabled
+                )
+                val prompt = if (settings.enabled) {
+                    agentPromptBuilder.prepare(history, model, emptyList(), limits = settings.limits)
+                    null
+                } else promptBuilder.prepare(history, model)
                 currentCoroutineContext().ensureActive()
                 val responseId = UUID.randomUUID().toString()
+                val agentRun = if (settings.enabled) {
+                    AgentRunRecord(UUID.randomUUID().toString(), ticket.accountGeneration)
+                } else null
+                synchronized(guard) { ticket.agentRunId = agentRun?.id }
                 assistantId = responseId
                 withContext(NonCancellable) {
                     if (synchronized(guard) { ticket.stopRequested } ||
                         ticket.accountGeneration != chatClient.accountGeneration.value
                     ) throw CancellationException("Stopped or account changed")
                     store.update(id) { latest ->
-                        if (latest.messages != original.messages || latest.model != original.model) {
+                        if (latest.messages != original.messages || latest.model != original.model ||
+                            latest.agentSettings != original.agentSettings
+                        ) {
                             throw com.tongxie.copilotgo.data.storage.SessionConflictException()
                         }
                         latest.copy(
@@ -198,18 +240,30 @@ class ChatStreamCenter(
                                 safeTitle(user.content.ifBlank { if (needsVision) "图片对话" else "附件对话" })
                             } else latest.title,
                             messages = (history + UiMessage(
-                                responseId, "assistant", "", isStreaming = true
+                                responseId, "assistant", "", isStreaming = true, agentRun = agentRun
                             )).toMutableList()
                         )
                     }
                     committed = true
                     receipt.complete(SendResult.Accepted(user.id))
                 }
-                if (prompt.truncated) {
+                if (prompt?.truncated == true) {
                     slot.notice.value = "较早的完整轮次已从本次请求中省略，原会话仍完整保留"
                 }
-                finishReason = stream(id, responseId, prompt)
-                if (finishReason == "length") slot.notice.value = "本次回复已达到模型输出长度限制"
+                finishReason = if (agentRun != null) {
+                    val result = chatClient.withAccount {
+                        requireNotNull(agentRunner).run(
+                            AgentRunInput(
+                                agentRun.id, id, ticket.accountGeneration, model, history, settings, agentRun.startedAt
+                            ),
+                            agentCallbacks(id, responseId, slot, ticket)
+                        )
+                    }
+                    if (!result.status.isTerminal) throw StreamProtocolException("Agent 未完成清理便结束运行")
+                    if (result.status == AgentRunStatus.FAILED) slot.error.value = result.notice ?: "Agent 运行失败"
+                    result.status.finishReason()
+                } else stream(id, responseId, requireNotNull(prompt))
+                if (agentRun == null && finishReason == "length") slot.notice.value = "本次回复已达到模型输出长度限制"
             } catch (e: CancellationException) {
                 stopped = true
                 receipt.complete(SendResult.Rejected("已取消发送，草稿已保留"))
@@ -225,21 +279,32 @@ class ChatStreamCenter(
                             val messageId = assistantId
                             store.update(id, persist = false) { latest ->
                                 latest.copy(messages = latest.messages.map { message ->
-                                    if (message.id != messageId) message else message.copy(
-                                        content = message.content.ifEmpty {
-                                            when {
-                                                stopped -> "[已停止]"
-                                                failure != null -> "[请求失败] $failure"
-                                                else -> "[模型未返回内容]"
-                                            }
-                                        },
-                                        isStreaming = false,
-                                        finishReason = when {
-                                            stopped -> "cancelled"
-                                            failure != null -> "error"
-                                            else -> finishReason ?: "stop"
+                                    if (message.id != messageId) message else {
+                                        val run = message.agentRun?.let {
+                                            if (it.status.isTerminal) it else it.interrupt(
+                                                if (stopped) AgentRunStatus.CANCELLED else AgentRunStatus.FAILED,
+                                                if (stopped) "运行已停止，不会自动重放工具调用"
+                                                else failure ?: "Agent 未返回完整的最终答复"
+                                            )
                                         }
-                                    )
+                                        message.copy(
+                                            content = message.content.ifEmpty {
+                                                when {
+                                                    stopped -> "[已停止]"
+                                                    failure != null -> "[请求失败] $failure"
+                                                    run != null -> run.notice ?: "[Agent 未返回最终答复]"
+                                                    else -> "[模型未返回内容]"
+                                                }
+                                            },
+                                            isStreaming = false,
+                                            agentRun = run,
+                                            finishReason = run?.status?.finishReason() ?: when {
+                                                stopped -> "cancelled"
+                                                failure != null -> "error"
+                                                else -> finishReason ?: "stop"
+                                            }
+                                        )
+                                    }
                                 }.toMutableList())
                             }
                             store.persist(id)
@@ -304,6 +369,7 @@ class ChatStreamCenter(
                 }
                 val userIndex = (assistantIndex - 1 downTo 0).firstOrNull { session.messages[it].role == "user" }
                     ?: throw ModelUnavailableException("此回复没有对应的用户消息")
+                requireSafeReplay(session.messages.drop(userIndex + 1))
                 session.messages.take(userIndex + 1)
             }
             is Request.Edit -> {
@@ -313,11 +379,13 @@ class ChatStreamCenter(
                 if (text.isEmpty() || text.length > Constants.MAX_PROMPT_CHARACTERS) {
                     throw ModelUnavailableException("编辑内容不能为空或超过长度限制")
                 }
+                requireSafeReplay(session.messages.drop(index + 1))
                 session.messages.take(index) + session.messages[index].copy(content = text)
             }
             Request.Retry -> {
                 val index = session.messages.indexOfLast { it.role == "user" }
                 if (index < 0) throw ModelUnavailableException("没有可重试的用户消息")
+                requireSafeReplay(session.messages.drop(index + 1))
                 session.messages.take(index + 1)
             }
         }
@@ -356,6 +424,8 @@ class ChatStreamCenter(
             completeIfNotStarted()
             synchronized(guard) {
                 if (slot.ticket === ticket) {
+                    ticket.pendingApproval?.decision?.cancel()
+                    ticket.pendingApproval = null
                     slot.ticket = null
                     slot.sending.value = false
                 }
@@ -396,6 +466,10 @@ class ChatStreamCenter(
             val nextUser = (index + 1 until latest.messages.size).firstOrNull {
                 latest.messages[it].role == "user"
             } ?: latest.messages.size
+            val turnStart = (index downTo 0).firstOrNull { latest.messages[it].role == "user" } ?: index
+            if (latest.messages.subList(turnStart, nextUser).any { it.agentRun?.safeToRetry == false }) {
+                throw ModelUnavailableException("此轮包含已执行或结果未知的远端操作，不能单独删除执行记录；可删除整个会话")
+            }
             val orphaned = if (latest.messages[index].role == "user") {
                 latest.messages.subList(index + 1, nextUser).filter { it.role == "assistant" }.map { it.id }.toSet()
             } else emptySet()
@@ -410,11 +484,111 @@ class ChatStreamCenter(
 
     suspend fun setModelAndAwait(id: String, model: String): OperationResult = mutate(id) {
         if (model.isBlank()) throw ModelUnavailableException("请选择一个可用模型")
-        catalog.requireModel(model, needsVision = false)
+        val session = store.getSession(id) ?: throw SessionDeletedException()
+        catalog.requireModel(model, needsVision = false, needsTools = session.agentSettings.enabled)
         store.update(id) { it.copy(model = model) }
     }
 
     fun setModel(id: String, model: String) { scope.launch { setModelAndAwait(id, model) } }
+
+    suspend fun setAgentSettingsAndAwait(
+        id: String,
+        settings: AgentSessionSettings,
+        expectedSettings: AgentSessionSettings? = null
+    ): OperationResult = mutate(id) {
+        val session = store.getSession(id) ?: throw SessionDeletedException()
+        if (settings.enabled) {
+            if (agentRunner == null) throw ModelUnavailableException("当前安装尚未配置 Agent 工具运行时")
+            catalog.requireModel(session.model, needsVision = false, needsTools = true)
+        }
+        store.update(id) { latest ->
+            if (expectedSettings != null && latest.agentSettings != expectedSettings) {
+                throw com.tongxie.copilotgo.data.storage.SessionConflictException()
+            }
+            latest.copy(agentSettings = settings)
+        }
+    }
+
+    fun respondToApproval(
+        id: String,
+        binding: AgentApprovalBinding,
+        decision: AgentApprovalDecision
+    ): AgentApprovalResponse = synchronized(guard) {
+        val ticket = slots[id]?.ticket
+        val pending = ticket?.pendingApproval
+        when {
+            ticket == null || pending == null || ticket.stopRequested ||
+                binding != pending.request.binding || ticket.agentRunId != binding.runId ->
+                AgentApprovalResponse.Rejected("此审批已失效，请查看当前工具请求")
+            ticket.accountGeneration != chatClient.accountGeneration.value ||
+                binding.accountGeneration != ticket.accountGeneration ->
+                AgentApprovalResponse.Rejected("登录状态已更改，此审批已失效")
+            System.currentTimeMillis() >= pending.request.expiresAt ->
+                AgentApprovalResponse.Rejected("此审批已过期，工具不会执行")
+            agentRunner?.isApprovalCurrent(binding) != true ->
+                AgentApprovalResponse.Rejected("工具配置已更改，请重新发起请求")
+            !pending.decision.complete(decision) ->
+                AgentApprovalResponse.Rejected("此审批已处理，不能重复提交")
+            else -> AgentApprovalResponse.Accepted
+        }
+    }
+
+    private fun agentCallbacks(id: String, assistantId: String, slot: Slot, ticket: Ticket) =
+        object : AgentRunCallbacks {
+            override fun ensureActive() {
+                synchronized(guard) {
+                    if (slot.ticket !== ticket || ticket.stopRequested ||
+                        ticket.accountGeneration != chatClient.accountGeneration.value
+                    ) throw CancellationException("Agent session operation superseded")
+                }
+            }
+
+            override suspend fun publish(run: AgentRunRecord, content: String, durable: Boolean) {
+                if (run.id != ticket.agentRunId || run.accountGeneration != ticket.accountGeneration) {
+                    throw StreamProtocolException("Agent 运行标识不一致")
+                }
+                if (!run.status.isTerminal) ensureActive()
+                synchronized(guard) {
+                    val pending = ticket.pendingApproval
+                    val next = run.pendingApproval
+                    if (next?.binding != pending?.request?.binding) {
+                        pending?.decision?.cancel()
+                        ticket.pendingApproval = next?.let(::PendingApproval)
+                    }
+                }
+                store.update(id, persist = durable) { latest ->
+                    if (latest.messages.none { it.id == assistantId && it.agentRun?.id == run.id }) {
+                        throw com.tongxie.copilotgo.data.storage.SessionConflictException()
+                    }
+                    latest.copy(messages = latest.messages.map {
+                        if (it.id == assistantId) it.copy(content = content, agentRun = run.detached()) else it
+                    }.toMutableList())
+                }
+                slot.notice.value = run.notice
+            }
+
+            override suspend fun awaitApproval(request: AgentApprovalRequest): AgentApprovalDecision {
+                ensureActive()
+                val pending = synchronized(guard) {
+                    ticket.pendingApproval?.takeIf { it.request.binding == request.binding }
+                } ?: throw CancellationException("Approval is no longer active")
+                return pending.decision.await()
+            }
+        }
+
+    private fun requireSafeReplay(messages: List<UiMessage>) {
+        if (messages.any { it.agentRun?.safeToRetry == false }) {
+            throw ModelUnavailableException("此轮包含已执行或结果未知的远端操作，不能自动重放；请发送新消息并逐项确认")
+        }
+    }
+
+    private fun AgentRunStatus.finishReason(): String = when (this) {
+        AgentRunStatus.COMPLETED -> "stop"
+        AgentRunStatus.LIMIT_REACHED -> "length"
+        AgentRunStatus.CANCELLED -> "cancelled"
+        AgentRunStatus.INTERRUPTED -> "interrupted"
+        else -> "error"
+    }
 
     private suspend fun mutate(id: String, action: suspend () -> Unit): OperationResult {
         val (slot, ticket) = reserve(id) ?: return OperationResult.Rejected("此会话正在处理请求，请先停止")
@@ -458,6 +632,7 @@ class ChatStreamCenter(
         is AttachmentImportException -> error.userMessage
         is SessionStorageException -> error.userMessage
         is ModelUnavailableException -> error.message ?: "模型暂不可用"
+        is AgentContextLimitException -> error.message ?: "Agent 上下文超过限制"
         is StreamProtocolException -> error.message ?: "响应中断，请重试"
         else -> networkErrorMessage(error)
     }
