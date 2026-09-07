@@ -157,6 +157,18 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
 以及 AndroidX 的 min/compile SDK 要求。保持 UI、Remote 和 native 的边到边与 Back
 行为一致。新的权限、网络例外、导出根目录或凭据存储必须经过跨模块审查。
 
+工具解析依赖单独固定为 jsoup 1.23.2 和 networknt JSON Schema Validator 2.0.7。
+jsoup 的[官方 Android 说明](https://jsoup.org/download)要求 NIO core-library
+desugaring，因此使用 `desugar_jdk_libs_nio:2.1.5`，不降低本项目的 JVM 17 目标，
+也不同时引入其他 desugaring flavor。HTML 只能通过有界字符串解析接口处理，
+网络访问仍由应用的受约束 HTTP 客户端负责。
+networknt 使用 Java 8 / Jackson 2 的 2.x 发布线，支持 draft-07 与 2020-12；
+只处理 JSON，排除 `jackson-dataformat-yaml` 及其 SnakeYAML 依赖。
+不要为了正则兼容引入 GraalJS，也不要自动加载远程、文件或 classpath schema。
+JVM 字节码版本和桌面单测不能代替 API 31 / 36 上的实际库执行。
+同步解析及正则计算并不受协程超时强制中断；工具入口仍需限制输入和 schema 复杂度，
+对不支持的 schema 特征明确报错，而不是把依赖存在当作完整的安全或兼容性保证。
+
 DataStore 保持稳定的 1.1.7。它的默认 FileStorage 在 Windows/JVM 上将临时文件替换已有
 文件时存在 rename 回归（上游问题 203087070）；不得为此跳过迁移测试或使用 alpha 库。
 JVM 迁移 fixture 使用 `PreferenceDataStoreFactory.create(storage = ...)`，显式传入真实
