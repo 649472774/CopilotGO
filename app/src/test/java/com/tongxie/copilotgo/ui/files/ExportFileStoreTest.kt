@@ -115,7 +115,7 @@ class ExportFileStoreTest {
         assertTrue(text.contains("SEARCH_HIT S1"))
         assertTrue(text.contains("FETCHED_PAGE S2"))
         assertTrue(text.contains("https://example.com/page"))
-        assertTrue(text.contains("[S2]: <https://example.com/page>"))
+        assertTrue(text.contains("[S2](<https://example.com/page>)"))
         assertFalse(text.contains("private-runtime-id"))
         assertFalse(text.contains("accountGeneration"))
         assertFalse(text.contains("approvalId"))
@@ -125,5 +125,33 @@ class ExportFileStoreTest {
         val store = ExportFileStore(temporary.root)
         val exported = store.writeMessage(UiMessage("message", "assistant", "ordinary reply"))
         assertEquals("## Copilot\n\nordinary reply\n\n", store.file(exported.name).readText())
+    }
+
+    @Test fun laterSourcesCannotRetroactivelyLinkEarlierUnresolvedOrCodeMarkers() = runTest {
+        val store = ExportFileStore(temporary.root)
+        val early = "Unknown [S1]\n\n`[S1]`\n\n```text\n[S1]\n```\n"
+        val later = "Later response [S1]\n\n`[S1]` stays literal."
+        val source = SourceReference(
+            "https://example.com/later", "Later actual source", SourceKind.FETCHED_PAGE, "S1", "later-call"
+        )
+        val session = Session(
+            "fixture", "Source ownership", "fixture-model",
+            messages = mutableListOf(
+                UiMessage("early", "assistant", early),
+                UiMessage(
+                    "later", "assistant", later,
+                    agentRun = AgentRunRecord("later-run", 7, AgentRunStatus.COMPLETED, sources = listOf(source))
+                )
+            )
+        )
+        val exported = store.writeSession(session)
+        val text = store.file(exported.name).readText()
+        assertTrue(text.startsWith("# Source ownership\n\n## Copilot\n\n$early\n\n## Copilot\n\n$later\n\n"))
+        assertFalse(Regex("(?m)^\\[S[0-9]+]:").containsMatchIn(text))
+        val inlineSource = "[S1](<https://example.com/later>)"
+        assertEquals(1, Regex(Regex.escape(inlineSource)).findAll(text).count())
+        assertTrue(text.indexOf(inlineSource) > text.indexOf("### Actual sources"))
+        assertEquals(early, session.messages.first().content)
+        assertEquals(later, session.messages.last().content)
     }
 }
