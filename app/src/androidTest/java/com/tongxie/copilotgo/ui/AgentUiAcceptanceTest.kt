@@ -435,7 +435,11 @@ class AgentUiAcceptanceTest {
         val sending = mutableStateOf(true)
         rule.setContent { FixtureTheme { FixtureChat(session, sending) } }
         rule.waitForIdle()
+        saveSemantics("agent-manual-before-swipe")
+        saveScreenshot("agent-manual-before-swipe")
         rule.onNodeWithTag(ChatTags.MESSAGES).performTouchInput { swipeDown() }
+        saveSemantics("agent-manual-after-swipe")
+        saveScreenshot("agent-manual-after-swipe")
         rule.onNodeWithTag(ChatTags.LATEST).assertIsDisplayed()
         val before = scrollPosition()
         rule.runOnIdle {
@@ -567,10 +571,16 @@ class AgentUiAcceptanceTest {
         }.joinToString("\n")
         val actionDetails = listOf(
             AgentTags.REVIEW, AgentTags.APPROVE, AgentTags.DENY,
-            "agent-call-record-call-fixture", "agent-call-status-call-fixture"
+            "agent-call-record-call-fixture", "agent-call-status-call-fixture",
+            ChatTags.MESSAGES, ChatTags.LATEST, ChatTags.INPUT, ChatTags.EDITOR_VIEWPORT, ChatTags.STOP
         ).flatMap { tag ->
             rule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().map { node ->
-                "tag=$tag; placed=${node.layoutInfo.isPlaced}; position=${node.positionInWindow}; size=${node.size}; bounds=${node.boundsInWindow}"
+                val scroll = if (node.config.contains(SemanticsProperties.VerticalScrollAxisRange)) {
+                    val range = node.config[SemanticsProperties.VerticalScrollAxisRange]
+                    "value=${range.value()},max=${range.maxValue()}"
+                } else "none"
+                "tag=$tag; placed=${node.layoutInfo.isPlaced}; position=${node.positionInWindow}; " +
+                    "size=${node.size}; bounds=${node.boundsInWindow}; scroll=$scroll"
             }
         }.joinToString("\n")
         File(directory, "$name.txt").writeText(
