@@ -149,7 +149,15 @@ interface AgentRunCallbacks {
     fun ensureActive()
 }
 
-fun interface AgentRunner {
+interface PreparedAgentRun {
+    /** Recheck the prepared configuration immediately before durable admission. */
+    fun ensureCurrent()
+    suspend fun run(callbacks: AgentRunCallbacks): AgentRunRecord
+}
+
+interface AgentRunner {
+    /** Resolve and validate the first request without publishing or calling the model. */
+    suspend fun prepare(input: AgentRunInput): PreparedAgentRun
     suspend fun run(input: AgentRunInput, callbacks: AgentRunCallbacks): AgentRunRecord
 
     /** Fail closed for adapters that cannot prove the proposal still targets the same tool. */

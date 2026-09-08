@@ -13,6 +13,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -223,6 +224,84 @@ data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
             assertTrue(fixture.session().messages.isEmpty())
             assertTrue(fixture.model.requests.isEmpty())
             assertTrue(fixture.tools.invocations.isEmpty())
+        }
+    }
+
+    @Test
+    fun stopDuringDefinitionPreparationRejectsAdmissionAndReleasesTheSameTicket() = runBlocking {
+        Fixture(temporary.root).use { fixture ->
+            fixture.create()
+            val dataUri = CoreFixture.imageDataUri()
+            val attachment = fixture.core.store.attachments.importDataUri(dataUri)
+            val entered = CompletableDeferred<Unit>()
+            var cleaned = false
+            fixture.tools.snapshotAction = {
+                entered.complete(Unit)
+                try { awaitCancellation() } finally { cleaned = true }
+            }
+            val pending = async(Dispatchers.Default) {
+                fixture.center.submit(id, "keep image draft", attachmentRefs = listOf(attachment), submissionId = "draft")
+            }
+            withTimeout(3000) { entered.await() }
+            assertTrue(fixture.center.submit(id, "duplicate") is SendResult.Rejected)
+            assertTrue(fixture.session().messages.isEmpty())
+            fixture.center.stop(id)
+            assertTrue(withTimeout(3000) { pending.await() } is SendResult.Rejected)
+            fixture.idle()
+            assertTrue(cleaned)
+            assertTrue(fixture.session().messages.isEmpty())
+            assertTrue(fixture.model.requests.isEmpty())
+            assertEquals(dataUri, fixture.core.store.attachments.imageDataUri(attachment))
+            assertNull(fixture.center.errorFlow(id).value)
+            fixture.tools.snapshotAction = { AgentToolSnapshot(0, listOf(fixture.tools.descriptor)) }
+            fixture.model.answer("The image draft can be sent again.")
+            assertTrue(fixture.center.submit(
+                id, "keep image draft", attachmentRefs = listOf(attachment), submissionId = "draft"
+            ) is SendResult.Accepted)
+            fixture.idle()
+            assertEquals(1, fixture.session().messages.count { it.role == "user" })
+            assertEquals(1, fixture.model.requests.size)
+        }
+    }
+
+    @Test
+    fun logoutDuringDefinitionPreparationRejectsBeforePersistingTheUserMessage() = runBlocking {
+        Fixture(temporary.root).use { fixture ->
+            fixture.create()
+            val entered = CompletableDeferred<Unit>()
+            var cleaned = false
+            fixture.tools.snapshotAction = {
+                entered.complete(Unit)
+                try { awaitCancellation() } finally { cleaned = true }
+            }
+            val pending = async(Dispatchers.Default) { fixture.center.submit(id, "keep account draft") }
+            withTimeout(3000) { entered.await() }
+            fixture.core.auth.logout()
+            assertTrue(withTimeout(3000) { pending.await() } is SendResult.Rejected)
+            fixture.idle()
+            assertTrue(cleaned)
+            assertTrue(fixture.session().messages.isEmpty())
+            assertTrue(fixture.model.requests.isEmpty())
+            assertTrue(fixture.tools.invocations.isEmpty())
+            assertNull(fixture.center.errorFlow(id).value)
+        }
+    }
+
+    @Test
+    fun changedDefinitionSnapshotRejectsBeforeDurableAdmission() = runBlocking {
+        Fixture(temporary.root).use { fixture ->
+            fixture.create()
+            fixture.tools.snapshotAction = {
+                val snapshot = AgentToolSnapshot(fixture.tools.revision.value, listOf(fixture.tools.descriptor))
+                fixture.tools.invalidate()
+                snapshot
+            }
+            assertTrue(fixture.center.submit(id, "keep configuration draft") is SendResult.Rejected)
+            fixture.idle()
+            assertTrue(fixture.session().messages.isEmpty())
+            assertTrue(fixture.model.requests.isEmpty())
+            assertTrue(fixture.tools.invocations.isEmpty())
+            assertNotNull(fixture.center.errorFlow(id).value)
         }
     }
 

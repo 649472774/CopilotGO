@@ -8,13 +8,14 @@ import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
 import com.tongxie.copilotgo.data.agent.AgentApprovalRequest
 import com.tongxie.copilotgo.data.agent.AgentApprovalResponse
 import com.tongxie.copilotgo.data.agent.AgentContextLimitException
-import com.tongxie.copilotgo.data.agent.AgentPromptBuilder
 import com.tongxie.copilotgo.data.agent.AgentRunCallbacks
 import com.tongxie.copilotgo.data.agent.AgentRunInput
 import com.tongxie.copilotgo.data.agent.AgentRunRecord
 import com.tongxie.copilotgo.data.agent.AgentRunStatus
 import com.tongxie.copilotgo.data.agent.AgentRunner
 import com.tongxie.copilotgo.data.agent.AgentSessionSettings
+import com.tongxie.copilotgo.data.agent.AgentToolConfigurationChangedException
+import com.tongxie.copilotgo.data.agent.AgentToolException
 import com.tongxie.copilotgo.data.agent.detached
 import com.tongxie.copilotgo.data.agent.interrupt
 import com.tongxie.copilotgo.data.net.networkErrorMessage
@@ -54,7 +55,6 @@ class ChatStreamCenter(
     private val guard = Any()
     private val slots = LinkedHashMap<String, Slot>(16, 0.75f, true)
     private val promptBuilder = PromptBuilder(store.attachments)
-    private val agentPromptBuilder = AgentPromptBuilder(store.attachments)
     private val deletionListener: (String) -> Unit = { stop(it) }
     private var accountGeneration = chatClient.accountGeneration.value
 
@@ -213,15 +213,17 @@ class ChatStreamCenter(
                 val model = catalog.requireModel(
                     original.model, original.model.isBlank() && needsVision, needsTools = settings.enabled
                 )
-                val prompt = if (settings.enabled) {
-                    agentPromptBuilder.prepare(history, model, emptyList(), limits = settings.limits)
-                    null
-                } else promptBuilder.prepare(history, model)
-                currentCoroutineContext().ensureActive()
                 val responseId = UUID.randomUUID().toString()
                 val agentRun = if (settings.enabled) {
                     AgentRunRecord(UUID.randomUUID().toString(), ticket.accountGeneration)
                 } else null
+                val preparedAgent = agentRun?.let {
+                    requireNotNull(agentRunner).prepare(AgentRunInput(
+                        it.id, id, ticket.accountGeneration, model, history, settings, it.startedAt
+                    ))
+                }
+                val prompt = if (preparedAgent == null) promptBuilder.prepare(history, model) else null
+                currentCoroutineContext().ensureActive()
                 synchronized(guard) { ticket.agentRunId = agentRun?.id }
                 assistantId = responseId
                 withContext(NonCancellable) {
@@ -229,6 +231,7 @@ class ChatStreamCenter(
                         ticket.accountGeneration != chatClient.accountGeneration.value
                     ) throw CancellationException("Stopped or account changed")
                     store.update(id) { latest ->
+                        preparedAgent?.ensureCurrent()
                         if (latest.messages != original.messages || latest.model != original.model ||
                             latest.agentSettings != original.agentSettings
                         ) {
@@ -252,12 +255,7 @@ class ChatStreamCenter(
                 }
                 finishReason = if (agentRun != null) {
                     val result = chatClient.withAccount {
-                        requireNotNull(agentRunner).run(
-                            AgentRunInput(
-                                agentRun.id, id, ticket.accountGeneration, model, history, settings, agentRun.startedAt
-                            ),
-                            agentCallbacks(id, responseId, slot, ticket)
-                        )
+                        requireNotNull(preparedAgent).run(agentCallbacks(id, responseId, slot, ticket))
                     }
                     if (!result.status.isTerminal) throw StreamProtocolException("Agent 未完成清理便结束运行")
                     if (result.status == AgentRunStatus.FAILED) slot.error.value = result.notice ?: "Agent 运行失败"
@@ -633,6 +631,8 @@ class ChatStreamCenter(
         is SessionStorageException -> error.userMessage
         is ModelUnavailableException -> error.message ?: "模型暂不可用"
         is AgentContextLimitException -> error.message ?: "Agent 上下文超过限制"
+        is AgentToolConfigurationChangedException -> "工具配置已更改，请重新发送；草稿已保留"
+        is AgentToolException -> error.userMessage
         is StreamProtocolException -> error.message ?: "响应中断，请重试"
         else -> networkErrorMessage(error)
     }

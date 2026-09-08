@@ -1,6 +1,8 @@
 package com.tongxie.copilotgo.data.agent
 
 import com.tongxie.copilotgo.data.auth.withResponse
+import com.tongxie.copilotgo.data.chat.CoreFixture
+import com.tongxie.copilotgo.data.chat.UiMessage
 import com.tongxie.copilotgo.data.storage.AppPaths
 import com.tongxie.copilotgo.data.storage.AttachmentStore
 import kotlinx.coroutines.CancellationException
@@ -14,6 +16,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -31,6 +35,42 @@ class AgentEngineTest {
     private fun engine(model: AgentTestModel, tools: AgentTestExecutor) = AgentEngine(
         model, tools, AgentPromptBuilder(AttachmentStore(AppPaths(temporary.root)))
     )
+
+    @Test
+    fun preparedFirstRequestReusesItsImageHistoryAndDetachedDefinitions() = runBlocking {
+        val model = AgentTestModel().apply { answer("The prepared image was retained.") }
+        val tools = AgentTestExecutor()
+        val schema = tools.descriptor.inputSchema.toMutableMap()
+        tools.descriptor = tools.descriptor.copy(inputSchema = JsonObject(schema))
+        var snapshots = 0
+        tools.snapshotAction = {
+            assertEquals("The catalog must not be rebuilt after admission", 1, ++snapshots)
+            AgentToolSnapshot(tools.revision.value, listOf(tools.descriptor))
+        }
+        val attachments = AttachmentStore(AppPaths(temporary.root))
+        val dataUri = CoreFixture.imageDataUri()
+        val image = attachments.importDataUri(dataUri)
+        val history = mutableListOf(UiMessage("user", "user", "Prepared image", attachments = listOf(image)))
+        val input = agentInput().copy(
+            model = agentTestModel.copy(capabilities = agentTestModel.capabilities!!.copy(
+                supports = agentTestModel.capabilities!!.supports!!.copy(vision = true)
+            )),
+            history = history
+        )
+        val prepared = engine(model, tools).prepare(input)
+        assertTrue(model.requests.isEmpty())
+        schema["description"] = JsonPrimitive("A later mutation must not enter the first request")
+        history[0] = UiMessage("replacement", "user", "Unprepared replacement")
+        val run = prepared.run(AgentTestCallbacks())
+        assertEquals(AgentRunStatus.COMPLETED, run.status)
+        assertEquals(1, snapshots)
+        val request = model.requests.single()
+        assertFalse(request.tools.single().function.parameters.containsKey("description"))
+        val user = request.messages.single { it.role == "user" }.content.toString()
+        assertTrue(user.contains("Prepared image"))
+        assertTrue(user.contains(dataUri))
+        assertFalse(user.contains("Unprepared replacement"))
+    }
 
     @Test
     fun realExecutorOutputIsDurableBeforeTheModelContinuation() = runBlocking {

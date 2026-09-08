@@ -68,7 +68,8 @@ internal class AgentTestExecutor(kind: AgentToolKind = AgentToolKind.MCP) : Agen
         )
     }
 
-    override suspend fun snapshot() = AgentToolSnapshot(revision.value, listOf(descriptor))
+    var snapshotAction: suspend () -> AgentToolSnapshot = { AgentToolSnapshot(revision.value, listOf(descriptor)) }
+    override suspend fun snapshot() = snapshotAction()
     override fun isCurrent(identity: AgentToolIdentity) =
         identity == descriptor.identity && identity.configRevision == revision.value
     override suspend fun validate(invocation: AgentToolInvocation) = validateAction(invocation)

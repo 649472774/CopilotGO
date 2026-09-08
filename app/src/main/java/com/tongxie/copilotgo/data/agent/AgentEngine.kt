@@ -2,6 +2,7 @@ package com.tongxie.copilotgo.data.agent
 
 import com.tongxie.copilotgo.data.Constants
 import com.tongxie.copilotgo.data.chat.AgentJsonGuard
+import com.tongxie.copilotgo.data.chat.AgentRequestEncoder
 import com.tongxie.copilotgo.data.chat.ModelUnavailableException
 import com.tongxie.copilotgo.data.chat.StreamProtocolException
 import com.tongxie.copilotgo.data.net.networkErrorMessage
@@ -25,6 +26,8 @@ import java.io.IOException
 import java.net.URI
 import java.net.URISyntaxException
 import java.util.UUID
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /**
  * One structured operation inside the caller's existing session reservation.
@@ -39,15 +42,74 @@ class AgentEngine(
 ) : AgentRunner {
     override fun isApprovalCurrent(binding: AgentApprovalBinding): Boolean = executor.isCurrent(binding.tool)
 
+    override suspend fun prepare(input: AgentRunInput): PreparedAgentRun = prepareRun(input)
+
     override suspend fun run(input: AgentRunInput, callbacks: AgentRunCallbacks): AgentRunRecord =
         withContext(Dispatchers.Default) {
             val operation = Operation(input, callbacks)
             operation.run()
         }
 
+    private suspend fun prepareRun(input: AgentRunInput): PreparedRun = withContext(Dispatchers.Default) {
+        val started = TimeSource.Monotonic.markNow()
+        withTimeoutOrNull(input.settings.limits.maxDurationMillis) {
+            require(input.settings.enabled) { "Agent mode was not enabled" }
+            currentCoroutineContext().ensureActive()
+            val supplied = executor.snapshot()
+            val snapshot = supplied.copy(
+                tools = supplied.tools.map { it.copy(inputSchema = AgentValues.detached(it.inputSchema)) },
+                issues = supplied.issues.toList()
+            )
+            validateCatalog(snapshot, input.settings.limits)
+            if (snapshot.tools.isEmpty()) {
+                throw AgentToolException("没有可用工具，请在 Agent 设置中启用搜索或配置远程 MCP")
+            }
+            val prompt = promptBuilder.prepare(
+                input.history, input.model, snapshot.tools.map { it.modelDefinition() }, limits = input.settings.limits
+            )
+            AgentRequestEncoder.encode(prompt.request, json)
+            currentCoroutineContext().ensureActive()
+            PreparedRun(input, snapshot, prompt, started).also { it.ensureCurrent() }
+        } ?: throw AgentContextLimitException("准备 Agent 请求超时，草稿已保留")
+    }
+
+    private inner class PreparedRun(
+        val input: AgentRunInput,
+        val snapshot: AgentToolSnapshot,
+        val firstPrompt: PreparedAgentPrompt,
+        private val started: TimeMark
+    ) : PreparedAgentRun {
+        fun remainingMillis() = input.settings.limits.maxDurationMillis - started.elapsedNow().inWholeMilliseconds
+
+        override fun ensureCurrent() {
+            validateCatalog(snapshot, input.settings.limits)
+            if (remainingMillis() <= 0) throw AgentContextLimitException("准备 Agent 请求超时，草稿已保留")
+        }
+
+        override suspend fun run(callbacks: AgentRunCallbacks): AgentRunRecord = withContext(Dispatchers.Default) {
+            Operation(input, callbacks, this@PreparedRun).run()
+        }
+    }
+
+    private fun validateCatalog(snapshot: AgentToolSnapshot, limits: AgentLimits) {
+        if (snapshot.revision != executor.revision.value) throw AgentToolConfigurationChangedException()
+        if (snapshot.tools.size > limits.maxTools || snapshot.tools.map { it.name }.distinct().size != snapshot.tools.size) {
+            throw AgentToolException("工具数量过多或名称重复，请检查配置")
+        }
+        snapshot.tools.forEach { tool ->
+            if (!NAME.matches(tool.name) || tool.description.length > 8192 ||
+                tool.identity.configId.isBlank() || tool.identity.configId.length > 128 ||
+                tool.identity.configRevision < 0 || tool.identity.definitionDigest.length !in 1..128 ||
+                tool.identity.toolName.length !in 1..256 || tool.destination.length !in 1..2048 ||
+                tool.destination.any { it.isISOControl() } || !executor.isCurrent(tool.identity)
+            ) throw AgentToolException("工具定义或配置标识无效，请刷新工具设置")
+        }
+    }
+
     private inner class Operation(
         private val input: AgentRunInput,
-        private val callbacks: AgentRunCallbacks
+        private val callbacks: AgentRunCallbacks,
+        private val prepared: PreparedRun? = null
     ) {
         private val limits = input.settings.limits
         private var record = AgentRunRecord(input.runId, input.accountGeneration, startedAt = input.startedAt)
@@ -77,7 +139,7 @@ class AgentEngine(
                     throw ModelUnavailableException("所选模型不支持 Agent 工具调用")
                 }
                 ensureCurrent()
-                val completed = withTimeoutOrNull(limits.maxDurationMillis) { loop(); true }
+                val completed = withTimeoutOrNull(prepared?.remainingMillis() ?: limits.maxDurationMillis) { loop(); true }
                 if (completed == null) {
                     record = record.interrupt(AgentRunStatus.LIMIT_REACHED, "已达到 Agent 总运行时间限制，现有内容已保留", clock())
                 }
@@ -119,15 +181,9 @@ class AgentEngine(
         }
 
         private suspend fun loop() = coroutineScope {
-            val supplied = executor.snapshot()
-            val snapshot = supplied.copy(
-                tools = supplied.tools.map { it.copy(inputSchema = AgentValues.detached(it.inputSchema)) },
-                issues = supplied.issues.toList()
-            )
-            validateCatalog(snapshot)
-            if (snapshot.tools.isEmpty()) {
-                throw AgentToolException("没有可用工具，请在 Agent 设置中启用搜索或配置远程 MCP")
-            }
+            val preparation = prepared ?: prepareRun(input)
+            preparation.ensureCurrent()
+            val snapshot = preparation.snapshot
             if (snapshot.issues.isNotEmpty()) {
                 record = record.copy(notice = "部分工具不可用，请在设置中查看；本次仅使用成功加载的工具")
             }
@@ -144,7 +200,7 @@ class AgentEngine(
                         limit("已达到 Agent 模型轮次限制，现有内容已保留")
                         break
                     }
-                    val prompt = promptBuilder.prepare(
+                    val prompt = if (record.steps.isEmpty()) preparation.firstPrompt else promptBuilder.prepare(
                         input.history, input.model, snapshot.tools.map { it.modelDefinition() }, record.steps, limits
                     )
                     if (prompt.truncated) {
@@ -231,21 +287,6 @@ class AgentEngine(
                 }
             } finally {
                 watcher.cancelAndJoin()
-            }
-        }
-
-        private fun validateCatalog(snapshot: AgentToolSnapshot) {
-            if (snapshot.revision != executor.revision.value) throw AgentToolConfigurationChangedException()
-            if (snapshot.tools.size > limits.maxTools || snapshot.tools.map { it.name }.distinct().size != snapshot.tools.size) {
-                throw AgentToolException("工具数量过多或名称重复，请检查配置")
-            }
-            snapshot.tools.forEach { tool ->
-                if (!NAME.matches(tool.name) || tool.description.length > 8192 ||
-                    tool.identity.configId.isBlank() || tool.identity.configId.length > 128 ||
-                    tool.identity.configRevision < 0 || tool.identity.definitionDigest.length !in 1..128 ||
-                    tool.identity.toolName.length !in 1..256 || tool.destination.length !in 1..2048 ||
-                    tool.destination.any { it.isISOControl() } || !executor.isCurrent(tool.identity)
-                ) throw AgentToolException("工具定义或配置标识无效，请刷新工具设置")
             }
         }
 
