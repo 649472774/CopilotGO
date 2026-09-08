@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertHasClickAction
@@ -216,6 +218,47 @@ class NativeUiAcceptanceTest {
         rule.onNodeWithTag(ChatTags.INPUT).assertWidthIsAtLeast(280.dp)
         rule.onNodeWithText("Retry fixture").performScrollTo().assertIsDisplayed().performClick()
         rule.runOnIdle { assertEquals(1, retries.get()) }
+    }
+
+    @Test fun enabledSendAndStopGlyphsContrastWithTheirFilledSurfacesInBothThemes() {
+        val dark = mutableStateOf(false)
+        val sending = mutableStateOf(false)
+        rule.setContent {
+            FixtureTheme(dark = dark.value) {
+                Box(Modifier.fillMaxSize()) {
+                    ChatComposer(
+                        text = "Controlled glyph fixture",
+                        attachments = emptyList(),
+                        onTextChange = {}, onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
+                        onRemoveAttachment = {}, onPreviewAttachment = {},
+                        sending = sending.value
+                    )
+                }
+            }
+        }
+        for (darkTheme in listOf(false, true)) {
+            for (stop in listOf(false, true)) {
+                rule.runOnIdle { dark.value = darkTheme; sending.value = stop }
+                val tag = if (stop) ChatTags.STOP else ChatTags.SEND
+                val node = rule.onNodeWithTag(tag)
+                    .assertIsDisplayed().assertIsEnabled().assertHasClickAction()
+                    .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+                val pixels = node.captureToImage().toPixelMap()
+                var minimum = 1f
+                var maximum = 0f
+                // The central square excludes the round surface's transparent corners.
+                for (y in pixels.height / 4 until pixels.height * 3 / 4) {
+                    for (x in pixels.width / 4 until pixels.width * 3 / 4) {
+                        val luminance = pixels[x, y].luminance()
+                        minimum = minOf(minimum, luminance)
+                        maximum = maxOf(maximum, luminance)
+                    }
+                }
+                val contrast = (maximum + 0.05f) / (minimum + 0.05f)
+                saveScreenshot("composer-enabled-${if (stop) "stop" else "send"}-${if (darkTheme) "dark" else "light"}")
+                assertTrue("Visible $tag glyph contrast in dark=$darkTheme was $contrast", contrast >= 4.5f)
+            }
+        }
     }
 
     @Test fun textOnlyAttachmentsCanSendAndRemovalIsNamed() {
