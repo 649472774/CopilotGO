@@ -41,8 +41,10 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +62,7 @@ fun PageScaffold(
                 title = {
                     Text(
                         title,
+                        style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.semantics { heading() }
@@ -85,7 +88,7 @@ fun PageScaffold(
             modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
             contentAlignment = Alignment.TopCenter
         ) {
-            content(Modifier.widthIn(max = 840.dp).fillMaxSize())
+            content(Modifier.widthIn(max = AppLayout.PageWidth).fillMaxSize())
         }
     }
 }
@@ -108,12 +111,18 @@ fun ScreenState(
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)
     ) {
         if (loading) CircularProgressIndicator(modifier = Modifier.size(32.dp))
-        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() }
+        )
         detail?.let {
             Text(
                 it,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
             )
         }
         if (actionLabel != null && onAction != null) {

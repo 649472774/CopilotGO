@@ -23,6 +23,8 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.captureToImage
@@ -71,7 +73,7 @@ class MarkdownRenderingTest {
         rule.onNodeWithTag("markdown-code-copy")
             .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()
         rule.onNodeWithTag("markdown-code-wrap")
-            .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()
+            .assertIsOn().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick().assertIsOff()
         rule.runOnIdle {
             assertEquals("val answer = 42\n", clipboard.value?.text)
             assertEquals(listOf("已复制代码"), feedback)

@@ -4,39 +4,33 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,30 +41,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
 import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 object ChatTags {
+    const val COMPOSER = "chat_composer"
     const val INPUT = "chat_input"
     const val EDITOR_VIEWPORT = "chat_editor_viewport"
     const val SEND = "chat_send"
     const val STOP = "chat_stop"
     const val ADD = "chat_add"
+    const val VOICE = "chat_voice"
+    const val HEADER = "chat_header"
     const val ATTACHMENTS = "chat_attachments"
     const val MESSAGES = "chat_messages"
     const val LATEST = "chat_latest"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatComposer(
     text: String,
@@ -91,20 +90,44 @@ fun ChatComposer(
     submissionEnabled: Boolean = true,
     compactHeight: Boolean = false,
     supportingText: String? = null,
+    hasNotice: Boolean = false,
     notice: @Composable () -> Unit = {}
 ) {
     var addMenu by remember { mutableStateOf(false) }
     val canEdit = enabled && !submitting
     val canSubmit = canEdit && submissionEnabled && !importing && (text.isNotBlank() || attachments.isNotEmpty())
     val editorInteraction = remember { MutableInteractionSource() }
-    val editorFocused by editorInteraction.collectIsFocusedAsState()
-    val editorColors = OutlinedTextFieldDefaults.colors()
     val editorLabel = stringResource(R.string.composer_label)
+    val streamingDescription = stringResource(R.string.chat_draft_while_sending)
 
-    Surface(modifier = modifier, tonalElevation = 2.dp) {
-        BoxWithConstraints(Modifier.padding(horizontal = 16.dp)) {
+    Surface(
+        modifier = modifier.testTag(ChatTags.COMPOSER).padding(horizontal = AppLayout.ComposerGutter, vertical = 8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = AppLayout.ComposerShape
+    ) {
+        BoxWithConstraints(Modifier.padding(horizontal = 8.dp)) {
             val inlineActions = constraints.hasBoundedWidth && maxWidth >= 560.dp && maxHeight < 200.dp
             val boundedHeight = constraints.hasBoundedHeight
+            val density = LocalDensity.current
+            val editorStyle = MaterialTheme.typography.bodyLarge
+            val textMeasurer = rememberTextMeasurer(cacheSize = 8)
+            val compactTextWidth = (constraints.maxWidth - with(density) {
+                (AppLayout.ControlSize * 3 + 8.dp * 3 + 16.dp).roundToPx()
+            }).coerceAtLeast(0)
+            val canUseCompactRow = !inlineActions && constraints.hasBoundedWidth && maxWidth >= 320.dp &&
+                density.fontScale <= 1.2f && attachments.isEmpty() && !importing && !hasNotice &&
+                supportingText == null && enabled && text.length <= 128 && '\n' !in text && '\r' !in text
+            // Measure only bounded short drafts at the candidate width; using the current editor's
+            // line count would oscillate between narrow and expanded layouts as a line wraps.
+            val compactRow = remember(canUseCompactRow, text, compactTextWidth, editorStyle, density) {
+                canUseCompactRow && !textMeasurer.measure(
+                    text = text,
+                    style = editorStyle,
+                    maxLines = 1,
+                    constraints = Constraints(maxWidth = compactTextWidth)
+                ).hasVisualOverflow
+            }
+            val singleRow = compactRow || inlineActions
             val editorScroll = rememberScrollState()
             Layout(
                 content = {
@@ -135,41 +158,33 @@ fun ChatComposer(
                             value = text,
                             onValueChange = onTextChange,
                             enabled = canEdit,
-                            maxLines = if (inlineActions) 1 else if (compactHeight) 2 else 6,
+                            maxLines = if (singleRow) 1 else if (compactHeight) 2 else 6,
                             interactionSource = editorInteraction,
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = when {
-                                !canEdit -> editorColors.disabledTextColor
-                                editorFocused -> editorColors.focusedTextColor
-                                else -> editorColors.unfocusedTextColor
-                            }),
+                            textStyle = editorStyle.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
                             modifier = Modifier.fillMaxWidth().testTag(ChatTags.INPUT)
-                                .padding(top = if (inlineActions) 0.dp else 8.dp)
-                                .defaultMinSize(minHeight = if (inlineActions) 48.dp else 56.dp)
-                                .then(if (inlineActions) Modifier.semantics { contentDescription = editorLabel } else Modifier),
+                                .defaultMinSize(minHeight = AppLayout.ControlSize)
+                                .semantics {
+                                    contentDescription = editorLabel
+                                    if (sending) stateDescription = streamingDescription
+                                },
                             decorationBox = { innerTextField ->
-                                OutlinedTextFieldDefaults.DecorationBox(
-                                    value = text,
-                                    innerTextField = innerTextField,
-                                    enabled = canEdit,
-                                    singleLine = false,
-                                    visualTransformation = VisualTransformation.None,
-                                    interactionSource = editorInteraction,
-                                    label = if (inlineActions) null else { { Text(editorLabel) } },
-                                    placeholder = { Text(stringResource(R.string.chat_input_hint)) },
-                                    colors = editorColors,
-                                    contentPadding = if (inlineActions) PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                                        else OutlinedTextFieldDefaults.contentPadding(),
-                                    container = {
-                                        OutlinedTextFieldDefaults.Container(
-                                            enabled = canEdit,
-                                            isError = false,
-                                            interactionSource = editorInteraction,
-                                            colors = editorColors,
-                                            shape = MaterialTheme.shapes.large
+                                Box(
+                                    Modifier.padding(horizontal = 8.dp, vertical = if (singleRow) 4.dp else 8.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (text.isEmpty()) {
+                                        Text(
+                                            stringResource(R.string.chat_input_hint),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = if (singleRow) 1 else 2
                                         )
                                     }
-                                )
+                                    innerTextField()
+                                }
                             }
                         )
                         supportingText?.let {
@@ -182,16 +197,15 @@ fun ChatComposer(
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Box {
-                            TextButton(
+                            IconButton(
                                 onClick = { addMenu = true },
                                 enabled = canEdit && !importing,
-                                modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.ADD)
+                                modifier = Modifier.size(AppLayout.ControlSize).testTag(ChatTags.ADD)
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = null)
-                                Text(stringResource(R.string.composer_add), Modifier.padding(start = 8.dp))
+                                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.composer_add))
                             }
                             DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
                                 DropdownMenuItem(
@@ -204,41 +218,58 @@ fun ChatComposer(
                                     leadingIcon = { Icon(Icons.Default.Image, contentDescription = null) },
                                     onClick = { addMenu = false; onPickImages() }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.composer_voice)) },
-                                    leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) },
-                                    onClick = { addMenu = false; onVoice() }
-                                )
                             }
                         }
-                        Spacer(Modifier.width(8.dp))
+                        if (!inlineActions) Spacer(Modifier.weight(1f))
+                        IconButton(
+                            onClick = onVoice,
+                            enabled = canEdit && !importing,
+                            modifier = Modifier.size(AppLayout.ControlSize).testTag(ChatTags.VOICE)
+                        ) {
+                            Icon(Icons.Default.Mic, contentDescription = stringResource(R.string.composer_voice))
+                        }
                         if (sending && !submitting) {
-                            FilledTonalButton(
+                            FilledIconButton(
                                 onClick = onStop,
-                                modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.STOP)
+                                modifier = Modifier.size(AppLayout.ControlSize).testTag(ChatTags.STOP)
                             ) {
-                                Icon(Icons.Default.Stop, contentDescription = null)
-                                Text(stringResource(R.string.composer_stop), Modifier.padding(start = 8.dp))
+                                Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.composer_stop))
                             }
                         } else {
-                            Button(
+                            FilledIconButton(
                                 onClick = onSend,
                                 enabled = canSubmit && !sending,
-                                modifier = Modifier.sizeIn(minHeight = 48.dp).testTag(ChatTags.SEND)
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    // A partial color override otherwise inherits the composer's foreground.
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                modifier = Modifier.size(AppLayout.ControlSize).testTag(ChatTags.SEND)
                             ) {
-                                if (submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                                else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
-                                Text(
-                                    stringResource(if (submitting) R.string.composer_submitting else R.string.chat_send),
-                                    Modifier.padding(start = 8.dp)
+                                if (submitting) {
+                                    val description = stringResource(R.string.composer_submitting)
+                                    CircularProgressIndicator(
+                                        Modifier.size(20.dp).semantics { contentDescription = description },
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else Icon(
+                                    Icons.Default.ArrowUpward,
+                                    contentDescription = stringResource(R.string.chat_send)
                                 )
                             }
                         }
                     }
                 }
             ) { measurables, available ->
-                val gap = 8.dp.roundToPx()
-                val padding = if (inlineActions) 0 else 8.dp.roundToPx()
+                val gap = if (inlineActions) 8.dp.roundToPx() else 0
+                val padding = when {
+                    inlineActions -> 0
+                    compactRow -> 4.dp.roundToPx()
+                    else -> 8.dp.roundToPx()
+                }
                 val contentHeight = if (boundedHeight) {
                     (available.maxHeight - padding * 2).coerceAtLeast(0)
                 } else Constraints.Infinity
@@ -250,8 +281,12 @@ fun ChatComposer(
                     maxWidth = actionsWidth,
                     maxHeight = contentHeight
                 ))
-                val editorWidth = if (inlineActions) available.maxWidth - actions.width - gap else available.maxWidth
-                val editorHeight = if (!boundedHeight || inlineActions) contentHeight
+                val editorWidth = when {
+                    compactRow -> available.maxWidth - (AppLayout.ControlSize * 3 + 8.dp * 3).roundToPx()
+                    inlineActions -> available.maxWidth - actions.width - gap
+                    else -> available.maxWidth
+                }
+                val editorHeight = if (!boundedHeight || singleRow) contentHeight
                     else (contentHeight - actions.height - gap).coerceAtLeast(0)
                 val editor = measurables[0].measure(Constraints(
                     minWidth = if (available.hasBoundedWidth) editorWidth else 0,
@@ -262,14 +297,19 @@ fun ChatComposer(
                     if (inlineActions) editor.width + gap + actions.width else maxOf(editor.width, actions.width)
                 )
                 val height = available.constrainHeight(
-                    (if (inlineActions) maxOf(editor.height, actions.height) else editor.height + gap + actions.height) +
+                    (if (singleRow) maxOf(editor.height, actions.height) else editor.height + gap + actions.height) +
                         padding * 2
                 )
                 // Move the same editor node rather than recreate it when the IME changes available space.
                 layout(width, height) {
-                    editor.placeRelative(0, padding)
-                    if (inlineActions) actions.placeRelative(editor.width + gap, height - actions.height - padding)
-                    else actions.placeRelative(0, padding + editor.height + gap)
+                    if (compactRow) {
+                        editor.placeRelative((AppLayout.ControlSize + 8.dp).roundToPx(), padding)
+                        actions.placeRelative(0, height - actions.height - padding)
+                    } else {
+                        editor.placeRelative(0, padding)
+                        if (inlineActions) actions.placeRelative(editor.width + gap, height - actions.height - padding)
+                        else actions.placeRelative(0, padding + editor.height + gap)
+                    }
                 }
             }
         }

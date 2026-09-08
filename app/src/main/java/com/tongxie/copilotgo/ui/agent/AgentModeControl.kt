@@ -5,17 +5,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +41,7 @@ import com.tongxie.copilotgo.ui.components.PageScaffold
 import com.tongxie.copilotgo.ui.settings.SettingsChoiceRow
 import com.tongxie.copilotgo.ui.settings.SettingsSection
 import com.tongxie.copilotgo.ui.settings.SettingsToggleRow
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 @Composable
 internal fun AgentModeButton(
@@ -51,9 +55,12 @@ internal fun AgentModeButton(
     TextButton(
         onClick = onClick,
         enabled = interactive,
-        modifier = modifier.sizeIn(minHeight = 48.dp)
+        modifier = modifier.sizeIn(minWidth = AppLayout.ControlSize, minHeight = AppLayout.ControlSize)
             .semantics { stateDescription = description }.testTag(AgentTags.MODE)
-    ) { Text(label) }
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+    }
 }
 
 @Composable
@@ -103,7 +110,7 @@ internal fun AgentModeContent(
     val stale = settings != base
     PageScaffold(stringResource(R.string.agent_mode_title), onBack) { pageModifier ->
         Column(
-            pageModifier.verticalScroll(rememberScrollState()).padding(16.dp),
+            pageModifier.verticalScroll(rememberScrollState()).padding(AppLayout.PageGutter),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Column(Modifier.selectableGroup()) {
@@ -168,13 +175,10 @@ internal fun AgentModeContent(
                 enabled = !saving && !stale && (!draft.enabled || disabledReason == null),
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).testTag("agent-mode-save")
             ) { Text(stringResource(if (saving) R.string.state_saving else R.string.agent_mode_apply)) }
-            OutlinedButton(
+            TextButton(
                 onClick = { onBack(); onOpenTools() },
                 modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
             ) { Text(stringResource(R.string.agent_tools_settings)) }
-            TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)) {
-                Text(stringResource(R.string.action_back))
-            }
         }
     }
 }

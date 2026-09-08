@@ -21,12 +21,15 @@ GitHub Release 和用户最终交付目录由集成负责人统一操作。脚�
 发布包和本机基线包的证书相同；这不自动证明任何尚未检查的设备安装身份。
 公开记录位于 `scripts/release-signing.json`。保留原标签和 APK，不重写历史。
 
-后续已发布兼容版本为 `v0.2.0` / code 35，源码
+后续已发布兼容版本包括 `v0.2.0` / code 35，源码
 `90c84a7ddea7b6f36c2ca609d541bdd0c077faec`，APK SHA-256 为
 `47fb1867b87554844f9abcf5171b96e952be6524bbc077c018f2260a488c7022`，
-签名仍为上述证书。下一阶段从已经迁移的 code 35 fixture 数据继续升级，不重新
-导入或重置历史种子；构建下一阶段交付包时显式使用 `-RollbackTag v0.2.0`。
-原始 `v0.1.33` 标签、签名记录和 APK 仍保留。
+以及当前回滚版本 `v0.3.0` / code 36，源码
+`4fcffa75656c1facf92d36bb65874d8ab4636a15`，APK SHA-256 为
+`71bd83083b81722b6f88dc2a71904839d535f4e4999a330ccf8fe8d1b09fa936`。
+签名仍为上述证书。视觉里程碑 `v0.4.0` / code 37 从已经迁移的 code 36 fixture
+继续升级，不重新导入或重置历史种子；构建时显式使用 `-RollbackTag v0.3.0`。
+原始标签、签名记录和各版本 APK 都保留。
 
 ## 1. 先准备并提交版本
 
@@ -64,7 +67,7 @@ COPILOTGO_SIGNING_KEY_PASSWORD
 更换文件位置不等于允许更换证书。不要改指纹 pin 让错误签名的构建通过。
 
 ```powershell
-pwsh -File .\scripts\release.ps1 -JavaHome "C:\Program Files\Android\Android Studio\jbr"
+pwsh -File .\scripts\release.ps1 -JavaHome "C:\Program Files\Android\Android Studio\jbr" -RollbackTag v0.3.0
 ```
 
 脚本使用 `assembleDebug`、`testDebugUnitTest`、`lintDebug`、
@@ -164,8 +167,17 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
 证据目录不可覆盖；结果包括实际窗口配置、命令、精确源码 SHA、APK 摘要与测试结果。
 传入 `-ExpectedOrientation` 时，还要求本次生成的完整设备截图证明实际方向，
 不是只相信旋转设置。只有受控 fixture 截图目录会被读取，旧截图不会算作本次证据。
-`GoldenSessionMigrationInstrumentedTest` 在已接受的 code 35 设备上只使用
+`GoldenSessionMigrationInstrumentedTest` 在已经迁移的 fixture 设备上只使用
 `goldenSessionsMode=verify-migrated`，不能再次执行 `migrate-first`。
+`CompatibleUpdateAcceptanceTest#accepts_explicit_code37_candidate_while_code36_remains_installed`
+在保留 code 36 时，用显式暂存的同签名 v0.4.0 APK 调用真实更新验证器；它不安装或
+修改候选文件。覆盖安装后的六个既有主文件、备份和附件摘要还需与最新已接受记录比较。
+
+视觉里程碑另外保留同配置的原生浅色/深色完整截图、两轮实质审阅记录、实际 320dp /
+200% 与短横屏 IME、手动滚动、审批、来源和恢复证据。普通消息操作和启用的
+Send/Stop 图标都有原生回归；颜色令牌对比通过不能替代按钮实际像素可见。
+不要把正常字号与 200% 截图混作前后对比，也不要上传第三方参考图片。
+构建后的规则记录在 [DESIGN.md](DESIGN.md)。
 
 回滚标签保证能找回源码，但 Android 通常不允许把较低 versionCode 直接覆盖较高版本。
 优先从保留标签修复并发布递增 versionCode 的兼容版本。不要强制重置会话、恢复

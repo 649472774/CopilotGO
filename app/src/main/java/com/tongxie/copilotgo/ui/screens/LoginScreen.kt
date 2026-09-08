@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
@@ -32,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -51,6 +54,7 @@ import com.tongxie.copilotgo.ui.settings.GITHUB_DEVICE_AUTHORIZATION_URL
 import com.tongxie.copilotgo.ui.settings.SettingsSection
 import com.tongxie.copilotgo.ui.settings.trustedGitHubAuthorizationUrl
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import com.tongxie.copilotgo.util.Logger
 import kotlinx.coroutines.launch
 
@@ -112,13 +116,13 @@ fun LoginScreen(
             )
         } else {
             Column(
-                pageModifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                pageModifier.verticalScroll(rememberScrollState()).padding(AppLayout.PageGutter),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         stringResource(R.string.settings_app_name),
-                        style = MaterialTheme.typography.headlineLarge,
+                        style = MaterialTheme.typography.headlineMedium,
                         modifier = Modifier.semantics { heading() }
                     )
                     Text(
@@ -155,7 +159,7 @@ fun LoginScreen(
                             if (authorizationUrl == null) {
                                 FeedbackBanner(stringResource(R.string.settings_login_invalid_url))
                             }
-                            OutlinedButton(
+                            FilledTonalButton(
                                 onClick = {
                                     val copied = copyLoginText(
                                         context, context.getString(R.string.settings_login_code_label), current.userCode
@@ -258,7 +262,7 @@ fun LoginScreen(
                 SettingsSection(stringResource(R.string.settings_terms_title)) {
                     Text(
                         stringResource(R.string.settings_login_terms),
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -269,8 +273,9 @@ fun LoginScreen(
 
 @Composable
 private fun LoginProgress(text: String) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
     ) {
         CircularProgressIndicator(Modifier.size(28.dp))

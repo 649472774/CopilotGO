@@ -14,6 +14,9 @@ class ColorContrastTest {
                 Triple("secondary container", scheme.secondaryContainer, scheme.onSecondaryContainer),
                 Triple("surface", scheme.surface, scheme.onSurface),
                 Triple("secondary text", scheme.surface, scheme.onSurfaceVariant),
+                Triple("composer placeholder", scheme.surfaceContainer, scheme.onSurfaceVariant),
+                Triple("composer text", scheme.surfaceContainer, scheme.onSurface),
+                Triple("user bubble", scheme.secondaryContainer, scheme.onSecondaryContainer),
                 Triple("surface container", scheme.surfaceContainerHigh, scheme.onSurface),
                 Triple("error", scheme.errorContainer, scheme.onErrorContainer)
             )
@@ -21,6 +24,20 @@ class ColorContrastTest {
                 val ratio = contrast(background, foreground)
                 assertTrue("$name $role contrast was $ratio", ratio >= 4.5)
             }
+        }
+    }
+
+    @Test fun conversationSurfacesRemainNeutralAndControlsStayDistinct() {
+        for ((name, scheme) in listOf("light" to LightColors, "dark" to DarkColors)) {
+            listOf(
+                scheme.background, scheme.surface, scheme.secondaryContainer,
+                scheme.surfaceContainer, scheme.primary
+            ).forEach { color ->
+                val channels = listOf(color.red, color.green, color.blue)
+                assertTrue("$name conversation chrome must remain neutral", channels.max() - channels.min() < 0.035f)
+            }
+            assertTrue("$name secondary icons contrast", contrast(scheme.surfaceContainer, scheme.onSurfaceVariant) >= 3.0)
+            assertTrue("$name field outline contrast", contrast(scheme.surface, scheme.outline) >= 3.0)
         }
     }
 

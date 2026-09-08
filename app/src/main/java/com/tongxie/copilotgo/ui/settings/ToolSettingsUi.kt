@@ -143,7 +143,7 @@ internal fun ToolSettingsConfirmation(
             shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 6.dp
+            tonalElevation = 0.dp
         ) {
             Column(
                 Modifier.heightIn(max = maximumHeight).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -151,7 +151,7 @@ internal fun ToolSettingsConfirmation(
             ) {
                 Text(
                     title,
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.semantics { heading() }
                 )
                 Text(detail, style = MaterialTheme.typography.bodyLarge)
