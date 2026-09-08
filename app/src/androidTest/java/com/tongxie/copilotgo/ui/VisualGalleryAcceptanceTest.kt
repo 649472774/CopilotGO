@@ -25,6 +25,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -104,6 +105,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Repeatable whole-window visual evidence from production Compose screens.
@@ -169,6 +172,12 @@ class VisualGalleryAcceptanceTest {
         if (!empty) {
             scrollToReadingStart()
             rule.onNodeWithTag("agent-message-body-gallery-question").assertIsDisplayed()
+            if (rule.activity.resources.configuration.screenWidthDp >= 840) {
+                val answer = rule.onNodeWithTag("agent-message-body-gallery-answer").fetchSemanticsNode()
+                val density = rule.activity.resources.displayMetrics.density
+                val widthDp = answer.size.width / density
+                assertTrue("Expanded reading must use a deliberate 560-760dp measure, was $widthDp", widthDp in 560f..761f)
+            }
         }
         saveScreenshot("visual-${if (empty) "empty" else "conversation"}-${themeName(dark)}")
         if (!empty) assertOrdinaryMessageActions()
@@ -325,6 +334,28 @@ class VisualGalleryAcceptanceTest {
             rule.onRoot().captureToImage().asAndroidBitmap()
         }
         File(directory, "$name-semantics.txt").writeText(rule.onRoot(useUnmergedTree = true).printToString())
+        val density = rule.activity.resources.displayMetrics.density
+        val nodes = JSONArray()
+        for (tag in listOf(
+            ChatTags.INPUT, ChatTags.EDITOR_VIEWPORT, ChatTags.ADD, ChatTags.SEND, ChatTags.STOP,
+            "chat_voice", "chat_header", "agent-message-body-gallery-question",
+            "agent-message-body-gallery-answer", "agent-message-sources-gallery-answer"
+        )) {
+            rule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().forEach { node ->
+                nodes.put(JSONObject().put("tag", tag)
+                    .put("leftDp", node.positionInWindow.x / density)
+                    .put("topDp", node.positionInWindow.y / density)
+                    .put("widthDp", node.size.width / density)
+                    .put("heightDp", node.size.height / density)
+                    .put("visibleBoundsPx", node.boundsInWindow.toString()))
+            }
+        }
+        File(directory, "$name-layout.json").writeText(JSONObject()
+            .put("density", density)
+            .put("fontScale", rule.activity.resources.configuration.fontScale)
+            .put("screenWidthDp", rule.activity.resources.configuration.screenWidthDp)
+            .put("screenHeightDp", rule.activity.resources.configuration.screenHeightDp)
+            .put("nodes", nodes).toString(2))
     }
 
     private fun themeName(dark: Boolean) = if (dark) "dark" else "light"
