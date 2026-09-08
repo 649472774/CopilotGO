@@ -131,15 +131,17 @@ class NativeUiAcceptanceTest {
         val compact = mutableStateOf(false)
         rule.setContent {
             FixtureTheme {
-                ChatComposer(
-                    text = text.value,
-                    attachments = emptyList(),
-                    onTextChange = { text.value = it },
-                    onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
-                    onRemoveAttachment = {}, onPreviewAttachment = {},
-                    modifier = Modifier.fillMaxWidth().heightIn(max = if (compact.value) 160.dp else 320.dp),
-                    compactHeight = compact.value
-                )
+                Box(Modifier.fillMaxSize()) {
+                    ChatComposer(
+                        text = text.value,
+                        attachments = emptyList(),
+                        onTextChange = { text.value = it },
+                        onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
+                        onRemoveAttachment = {}, onPreviewAttachment = {},
+                        modifier = Modifier.fillMaxWidth().heightIn(max = if (compact.value) 160.dp else 320.dp),
+                        compactHeight = compact.value
+                    )
+                }
             }
         }
         rule.onNodeWithTag(ChatTags.INPUT).performClick().assertIsFocused()
@@ -158,7 +160,11 @@ class NativeUiAcceptanceTest {
 
     @Test fun shortComposerExpandsWithoutReplacingItsTouchFocusedEditor() {
         val text = mutableStateOf("")
-        rule.setContent { FixtureTheme { FixtureComposer(text) } }
+        rule.setContent {
+            FixtureTheme {
+                Box(Modifier.fillMaxSize()) { FixtureComposer(text) }
+            }
+        }
         val composer = rule.onNodeWithTag(ChatTags.COMPOSER)
         val compactWidth = with(rule.density) { composer.fetchSemanticsNode().size.width.toDp() } >= 360.dp
         fun assertCompactHeight() {
@@ -190,19 +196,21 @@ class NativeUiAcceptanceTest {
         val retries = AtomicInteger()
         rule.setContent {
             FixtureTheme {
-                ChatComposer(
-                    text = "Draft",
-                    attachments = emptyList(),
-                    onTextChange = {}, onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
-                    onRemoveAttachment = {}, onPreviewAttachment = {},
-                    hasNotice = true,
-                    notice = {
-                        FeedbackBanner(
-                            "Controlled recovery notice", isError = true,
-                            actionLabel = "Retry fixture", onAction = { retries.incrementAndGet() }
-                        )
-                    }
-                )
+                Box(Modifier.fillMaxSize()) {
+                    ChatComposer(
+                        text = "Draft",
+                        attachments = emptyList(),
+                        onTextChange = {}, onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
+                        onRemoveAttachment = {}, onPreviewAttachment = {},
+                        hasNotice = true,
+                        notice = {
+                            FeedbackBanner(
+                                "Controlled recovery notice", isError = true,
+                                actionLabel = "Retry fixture", onAction = { retries.incrementAndGet() }
+                            )
+                        }
+                    )
+                }
             }
         }
         rule.onNodeWithTag(ChatTags.INPUT).assertWidthIsAtLeast(280.dp)
