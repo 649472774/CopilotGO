@@ -103,7 +103,7 @@ fun ChatComposer(
 
     Surface(modifier = modifier, tonalElevation = 2.dp) {
         BoxWithConstraints(Modifier.padding(horizontal = 16.dp)) {
-            val inlineActions = constraints.hasBoundedWidth && maxWidth >= 600.dp && maxHeight < 200.dp
+            val inlineActions = constraints.hasBoundedWidth && maxWidth >= 560.dp && maxHeight < 200.dp
             val boundedHeight = constraints.hasBoundedHeight
             val editorScroll = rememberScrollState()
             Layout(

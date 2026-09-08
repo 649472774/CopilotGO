@@ -440,7 +440,7 @@ class AgentUiAcceptanceTest {
         rule.onNodeWithTag(ChatTags.MESSAGES).performTouchInput { swipeDown() }
         saveSemantics("agent-manual-after-swipe")
         saveScreenshot("agent-manual-after-swipe")
-        rule.onNodeWithTag(ChatTags.LATEST).assertIsDisplayed()
+        rule.onNodeWithTag(ChatTags.LATEST).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         val before = scrollPosition()
         rule.runOnIdle {
             val current = session.value
