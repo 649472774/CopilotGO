@@ -22,12 +22,15 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
@@ -38,7 +41,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.tongxie.copilotgo.R
 import com.tongxie.copilotgo.data.agent.AgentRunRecord
 import com.tongxie.copilotgo.data.agent.AgentRunStatus
 import com.tongxie.copilotgo.data.agent.AgentSessionSettings
@@ -166,6 +171,25 @@ class VisualGalleryAcceptanceTest {
             rule.onNodeWithTag("agent-message-body-gallery-question").assertIsDisplayed()
         }
         saveScreenshot("visual-${if (empty) "empty" else "conversation"}-${themeName(dark)}")
+        if (!empty) assertOrdinaryMessageActions()
+    }
+
+    private fun assertOrdinaryMessageActions() {
+        for (isUser in listOf(true, false)) {
+            val author = rule.activity.getString(
+                if (isUser) R.string.message_author_user else R.string.message_author_assistant
+            )
+            rule.onNodeWithContentDescription(rule.activity.getString(R.string.message_copy, author))
+                .performScrollTo().assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+            rule.onNodeWithContentDescription(rule.activity.getString(R.string.message_actions, author))
+                .performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+            rule.onNodeWithText(rule.activity.getString(R.string.message_share)).assertIsDisplayed().assertIsEnabled()
+            rule.onNodeWithText(rule.activity.getString(
+                if (isUser) R.string.message_edit else R.string.message_regenerate
+            )).assertIsDisplayed().assertIsEnabled()
+            rule.onNodeWithText(rule.activity.getString(R.string.action_delete)).assertIsDisplayed().assertIsEnabled()
+            Espresso.pressBack()
+        }
     }
 
     private fun captureMarkdown(dark: Boolean) {
