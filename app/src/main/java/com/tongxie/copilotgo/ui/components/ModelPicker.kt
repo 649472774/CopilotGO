@@ -2,6 +2,7 @@ package com.tongxie.copilotgo.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -12,11 +13,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -32,6 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tongxie.copilotgo.R
@@ -47,7 +53,9 @@ fun ModelPickerInline(
     loading: Boolean = false,
     error: String? = null,
     isStale: Boolean = false,
-    onRefresh: () -> Unit = {}
+    onRefresh: () -> Unit = {},
+    compact: Boolean = false,
+    headingText: String? = null
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -56,29 +64,60 @@ fun ModelPickerInline(
     val label = current?.name?.ifBlank { null } ?: currentModel.ifBlank {
         stringResource(R.string.model_picker_title)
     }
+    val status = when {
+        loading -> stringResource(R.string.model_loading)
+        error != null -> error
+        currentModel.isNotBlank() && current == null -> stringResource(R.string.model_unavailable)
+        isStale -> stringResource(R.string.model_cached)
+        else -> null
+    }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OutlinedButton(
+        TextButton(
             onClick = { expanded = true },
             enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("model_picker")
+                .semantics { status?.let { stateDescription = it } }
         ) {
-            Text(
-                label,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(Modifier.weight(1f)) {
+                headingText?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { heading() }
+                    )
+                }
+                Text(
+                    label,
+                    style = if (headingText != null) MaterialTheme.typography.bodyMedium
+                        else MaterialTheme.typography.labelLarge,
+                    color = if (headingText != null) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                    maxLines = if (compact) 1 else 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            else if (compact && status != null) Icon(
+                if (isStale && error == null && current != null) Icons.Default.Info else Icons.Default.ErrorOutline,
+                contentDescription = null,
+                tint = if (isStale && error == null && current != null) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp)
+            )
             else Icon(Icons.Default.ArrowDropDown, contentDescription = null)
         }
-        if (!loading && currentModel.isNotBlank() && current == null) {
+        if (!compact && !loading && currentModel.isNotBlank() && current == null) {
             Text(
                 stringResource(R.string.model_unavailable),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error
             )
-        } else if (isStale) {
+        } else if (!compact && isStale) {
             Text(
                 stringResource(R.string.model_cached),
                 style = MaterialTheme.typography.bodyMedium,
@@ -131,6 +170,18 @@ fun ModelPickerInline(
                                 onAction = onRefresh
                             )
                         }
+                        if (compact && !loading && currentModel.isNotBlank() && current == null) {
+                            item {
+                                Text(stringResource(R.string.model_unavailable), color = MaterialTheme.colorScheme.error)
+                            }
+                        } else if (compact && isStale) {
+                            item {
+                                Text(
+                                    stringResource(R.string.model_cached),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
                     }
                     if (filtered.isEmpty() && !loading) {
                         item {
@@ -158,8 +209,7 @@ fun ModelPickerInline(
                                 Text(
                                     model.name?.ifBlank { null } ?: model.id,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                                 if (!model.name.isNullOrBlank() && model.name != model.id) {
                                     Text(
