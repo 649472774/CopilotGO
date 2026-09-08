@@ -21,6 +21,13 @@ GitHub Release 和用户最终交付目录由集成负责人统一操作。脚�
 发布包和本机基线包的证书相同；这不自动证明任何尚未检查的设备安装身份。
 公开记录位于 `scripts/release-signing.json`。保留原标签和 APK，不重写历史。
 
+后续已发布兼容版本为 `v0.2.0` / code 35，源码
+`90c84a7ddea7b6f36c2ca609d541bdd0c077faec`，APK SHA-256 为
+`47fb1867b87554844f9abcf5171b96e952be6524bbc077c018f2260a488c7022`，
+签名仍为上述证书。下一阶段从已经迁移的 code 35 fixture 数据继续升级，不重新
+导入或重置历史种子；构建下一阶段交付包时显式使用 `-RollbackTag v0.2.0`。
+原始 `v0.1.33` 标签、签名记录和 APK 仍保留。
+
 ## 1. 先准备并提交版本
 
 在当前工作树使用 PowerShell 7。脚本默认**不升版、不装机、不复制、不提交、不推送**。
@@ -147,6 +154,19 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
 
 这些类需要由集成设备 lane 实际执行；编译通过不能代替执行结果。
 
+`scripts/run-native-acceptance.ps1` 复用现有 AndroidJUnitRunner，供独占设备 lane
+记录每次实际运行。它不启动模拟器、不安装 APK、不写入种子、不清数据，也不修改
+字体、显示或旋转设置。调用时提供明确的 `-Serial`、`-Label`、已存在的绝对路径
+`-EvidenceRoot`、`-Classes`、`-ExpectedTests` 和 `-ExpectedVersionCode`。
+只允许已保留的 `emulator-5582` / `CopilotGO_Upgrade_AOSP_API31` 与
+`emulator-5584` / `CopilotGO_Upgrade_AOSP_API36`，一次使用一个设备。
+脚本在运行前核对 AVD、API、用户解锁状态、已安装 APK 字节、发布证书与源码状态。
+证据目录不可覆盖；结果包括实际窗口配置、命令、精确源码 SHA、APK 摘要与测试结果。
+传入 `-ExpectedOrientation` 时，还要求本次生成的完整设备截图证明实际方向，
+不是只相信旋转设置。只有受控 fixture 截图目录会被读取，旧截图不会算作本次证据。
+`GoldenSessionMigrationInstrumentedTest` 在已接受的 code 35 设备上只使用
+`goldenSessionsMode=verify-migrated`，不能再次执行 `migrate-first`。
+
 回滚标签保证能找回源码，但 Android 通常不允许把较低 versionCode 直接覆盖较高版本。
 优先从保留标签修复并发布递增 versionCode 的兼容版本。不要强制重置会话、恢复
 不兼容数据库、改签名、卸载或用 `-d` 掩盖回滚风险。
@@ -156,6 +176,18 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
 依赖升级集中修改 version catalog，确认 AGP/Gradle/JDK/Kotlin 编译插件兼容关系，
 以及 AndroidX 的 min/compile SDK 要求。保持 UI、Remote 和 native 的边到边与 Back
 行为一致。新的权限、网络例外、导出根目录或凭据存储必须经过跨模块审查。
+
+工具解析依赖单独固定为 jsoup 1.23.2 和 networknt JSON Schema Validator 2.0.7。
+jsoup 的[官方 Android 说明](https://jsoup.org/download)要求 NIO core-library
+desugaring，因此使用 `desugar_jdk_libs_nio:2.1.5`，不降低本项目的 JVM 17 目标，
+也不同时引入其他 desugaring flavor。HTML 只能通过有界字符串解析接口处理，
+网络访问仍由应用的受约束 HTTP 客户端负责。
+networknt 使用 Java 8 / Jackson 2 的 2.x 发布线，支持 draft-07 与 2020-12；
+只处理 JSON，排除 `jackson-dataformat-yaml` 及其 SnakeYAML 依赖。
+不要为了正则兼容引入 GraalJS，也不要自动加载远程、文件或 classpath schema。
+JVM 字节码版本和桌面单测不能代替 API 31 / 36 上的实际库执行。
+同步解析及正则计算并不受协程超时强制中断；工具入口仍需限制输入和 schema 复杂度，
+对不支持的 schema 特征明确报错，而不是把依赖存在当作完整的安全或兼容性保证。
 
 DataStore 保持稳定的 1.1.7。它的默认 FileStorage 在 Windows/JVM 上将临时文件替换已有
 文件时存在 rename 回归（上游问题 203087070）；不得为此跳过迁移测试或使用 alpha 库。

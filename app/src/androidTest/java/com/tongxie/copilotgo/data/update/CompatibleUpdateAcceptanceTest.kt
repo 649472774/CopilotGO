@@ -23,7 +23,16 @@ import java.nio.file.attribute.BasicFileAttributes
 class CompatibleUpdateAcceptanceTest {
     @Test
     fun accepts_explicit_code35_candidate_while_code34_remains_installed() {
-        val fixture = explicitFixture()
+        verifyFixture("phase1-code34-to35", "0.2.0", 35L, 34L)
+    }
+
+    @Test
+    fun accepts_explicit_code36_candidate_while_code35_remains_installed() {
+        verifyFixture("phase2-code35-to36", "0.3.0", 36L, 35L)
+    }
+
+    private fun verifyFixture(marker: String, versionName: String, versionCode: Long, predecessorCode: Long) {
+        val fixture = explicitFixture(marker, versionName, versionCode)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("This fixture is only for the existing debug installation", PACKAGE_NAME, context.packageName)
 
@@ -47,7 +56,8 @@ class CompatibleUpdateAcceptanceTest {
                     }
 
                     val manager = context.packageManager
-                    assertEquals("Run this acceptance before replacing code 34", 34L, installedPackage(manager).longVersionCode)
+                    assertEquals("Run this acceptance before replacing the attested predecessor", predecessorCode,
+                        installedPackage(manager).longVersionCode)
                     val archive = requireNotNull(archivePackage(manager, fixture.apk)) { "The candidate is not an APK" }
                     assertEquals("Unexpected candidate package", PACKAGE_NAME, archive.packageName)
                     assertEquals("Unexpected candidate versionCode", fixture.versionCode, archive.longVersionCode)
@@ -72,13 +82,14 @@ class CompatibleUpdateAcceptanceTest {
                     assertEquals("Candidate length changed", before.size(), after.size())
                     assertEquals("Candidate modification time changed", before.lastModifiedTime(), after.lastModifiedTime())
                     assertEquals("Candidate file identity changed", before.fileKey(), after.fileKey())
-                    assertEquals("Verification must not install the candidate", 34L, installedPackage(manager).longVersionCode)
+                    assertEquals("Verification must not install the candidate", predecessorCode,
+                        installedPackage(manager).longVersionCode)
                 }
             }
         }
     }
 
-    private fun explicitFixture(): Fixture {
+    private fun explicitFixture(marker: String, versionName: String, versionCode: Long): Fixture {
         val arguments = InstrumentationRegistry.getArguments()
         val names = listOf("compatibleUpdateFixture", "candidateApk", "candidateSha256", "candidateVersion", "candidateVersionCode")
         assumeTrue(
@@ -90,9 +101,11 @@ class CompatibleUpdateAcceptanceTest {
                 "Supply all five compatible-update fixture arguments; missing $name"
             }
         }
-        require(values.getValue("compatibleUpdateFixture") == "phase1-code34-to35") { "Invalid fixture marker" }
-        require(values.getValue("candidateVersion") == "0.2.0") { "This fixture only accepts version 0.2.0" }
-        require(values.getValue("candidateVersionCode") == "35") { "This fixture only accepts versionCode 35" }
+        require(values.getValue("compatibleUpdateFixture") == marker) { "Invalid fixture marker for this acceptance epoch" }
+        require(values.getValue("candidateVersion") == versionName) { "Unexpected candidate version for this acceptance epoch" }
+        require(values.getValue("candidateVersionCode") == versionCode.toString()) {
+            "Unexpected candidate versionCode for this acceptance epoch"
+        }
         val sha256 = values.getValue("candidateSha256")
         require(sha256.matches(Regex("[a-fA-F0-9]{64}"))) { "candidateSha256 must contain exactly 64 hexadecimal characters" }
         val path = values.getValue("candidateApk")

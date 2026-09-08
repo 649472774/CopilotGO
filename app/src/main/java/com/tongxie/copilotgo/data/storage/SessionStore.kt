@@ -1,5 +1,9 @@
 package com.tongxie.copilotgo.data.storage
 
+import com.tongxie.copilotgo.data.agent.AgentRunStatus
+import com.tongxie.copilotgo.data.agent.AgentToolCallStatus
+import com.tongxie.copilotgo.data.agent.detached
+import com.tongxie.copilotgo.data.agent.interrupt
 import com.tongxie.copilotgo.data.chat.AttachmentKind
 import com.tongxie.copilotgo.data.chat.Session
 import com.tongxie.copilotgo.data.chat.SessionLoadState
@@ -401,10 +405,31 @@ class SessionStore(
         var changed = false
         val messages = original.messages.map { old ->
             var message = old
+            val run = old.agentRun
+            if (run != null && (!run.status.isTerminal || run.pendingApproval != null ||
+                    run.steps.any { step -> step.toolCalls.any { it.status in setOf(
+                        AgentToolCallStatus.PROPOSED, AgentToolCallStatus.AWAITING_APPROVAL, AgentToolCallStatus.RUNNING
+                    ) } })
+            ) {
+                message = message.copy(
+                    agentRun = run.interrupt(AgentRunStatus.INTERRUPTED, "应用重启，未完成的工具操作已中断；不会自动重放"),
+                    content = message.content.ifEmpty { "[Agent 已中断]" },
+                    isStreaming = false,
+                    finishReason = "interrupted"
+                )
+                changed = true
+            }
             if (old.isStreaming) {
                 message = message.copy(
                     content = message.content.ifEmpty { "[已中断]" },
-                    isStreaming = false, finishReason = "interrupted"
+                    isStreaming = false,
+                    finishReason = when (message.agentRun?.status) {
+                        AgentRunStatus.COMPLETED -> "stop"
+                        AgentRunStatus.LIMIT_REACHED -> "length"
+                        AgentRunStatus.CANCELLED -> "cancelled"
+                        AgentRunStatus.FAILED -> "error"
+                        else -> "interrupted"
+                    }
                 )
                 changed = true
             }
@@ -450,6 +475,8 @@ class SessionStore(
         snapshot(session)
     } catch (e: SerializationException) {
         throw SessionStorageException("会话文件格式损坏", e)
+    } catch (e: IllegalArgumentException) {
+        throw SessionStorageException("会话参数或工具记录超出安全限制，原文件已保留", e)
     }
 
     private fun readSummary(id: String): SessionSummary? {
@@ -512,7 +539,9 @@ class SessionStore(
         }
     )
 
-    private fun snapshot(session: Session) = session.copy(messages = ArrayList(session.messages))
+    private fun snapshot(session: Session) = session.copy(messages = session.messages.map {
+        it.copy(imageUrls = it.imageUrls.toList(), attachments = it.attachments.toList(), agentRun = it.agentRun?.detached())
+    }.toMutableList())
     private fun primary(id: String): File {
         val file = File(paths.sessions, "$id.json")
         if (file.canonicalFile.parentFile != paths.sessions.canonicalFile) {
@@ -546,7 +575,15 @@ class SessionStore(
     }
 
     private fun estimateBytes(session: Session?): Long = session?.messages?.sumOf { message ->
-        message.content.length * 2L + message.imageUrls.sumOf { it.length * 2L } + message.attachments.size * 256L
+        message.content.length * 2L + message.imageUrls.sumOf { it.length * 2L } + message.attachments.size * 256L +
+            (message.agentRun?.let { run ->
+                run.steps.sumOf { step ->
+                    step.assistantText.length * 2L + step.toolCalls.sumOf { call ->
+                        (call.arguments?.toString()?.length ?: 0) * 2L + (call.result?.content?.length ?: 0) * 2L +
+                            (call.result?.sources?.sumOf { it.url.length + it.title.length + (it.excerpt?.length ?: 0) } ?: 0) * 2L
+                    }
+                } + run.sources.sumOf { it.url.length + it.title.length + (it.excerpt?.length ?: 0) } * 2L
+            } ?: 0)
     } ?: 0
 
     internal val cachedSessionCount: Int get() = synchronized(cacheGuard) { entries.size }

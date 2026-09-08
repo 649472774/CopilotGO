@@ -2,6 +2,9 @@ package com.tongxie.copilotgo.ui.files
 
 import com.tongxie.copilotgo.data.chat.Session
 import com.tongxie.copilotgo.data.chat.UiMessage
+import com.tongxie.copilotgo.data.agent.AgentRunRecord
+import com.tongxie.copilotgo.ui.agent.agentSourceDestination
+import com.tongxie.copilotgo.ui.agent.isAgentSourceId
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FilterOutputStream
@@ -125,6 +128,68 @@ class ExportFileStore(cacheDir: File) {
             writer.write("\n")
         }
         if (attachmentNames.isNotEmpty()) writer.write("\n")
+        message.agentRun?.let { writeAgentRun(writer, it) }
+    }
+
+    private suspend fun writeAgentRun(writer: OutputStreamWriter, run: AgentRunRecord) {
+        writer.write("### Tool activity\n\nStatus: ${run.status.name}\n\n")
+        run.notice?.let { writeLiteralBlock(writer, it) }
+        for (step in run.steps) {
+            for (call in step.toolCalls) {
+                currentCoroutineContext().ensureActive()
+                writer.write("Tool: ")
+                writer.write(call.name.replace('\n', ' ').replace('\r', ' '))
+                writer.write("\n\nState: ${call.status.name}\n\n")
+                if (call.outcomeUnknown || call.result?.outcomeUnknown == true) {
+                    writer.write("Remote outcome unknown. Do not automatically repeat this action.\n\n")
+                }
+                if (call.destination.isNotEmpty()) {
+                    writer.write("Destination:\n\n")
+                    writeLiteralBlock(writer, call.destination)
+                }
+                call.arguments?.let {
+                    writer.write("Arguments:\n\n")
+                    writeLiteralBlock(writer, it.toString())
+                }
+                call.result?.let {
+                    writer.write(if (it.isError) "Tool error:\n\n" else "Tool result:\n\n")
+                    writeLiteralBlock(writer, it.content)
+                    if (it.truncated) writer.write("The tool result was limited in size.\n\n")
+                }
+            }
+        }
+        if (run.sources.isNotEmpty()) {
+            writer.write("### Actual sources\n\n")
+            for (source in run.sources) {
+                currentCoroutineContext().ensureActive()
+                writer.write("${source.kind.name} ")
+                writer.write(source.id.replace('\n', ' ').replace('\r', ' '))
+                writer.write("\n\n")
+                writeLiteralBlock(writer, source.title)
+                writeLiteralBlock(writer, source.url)
+                source.excerpt?.let { writeLiteralBlock(writer, it) }
+                val destination = agentSourceDestination(source.url)
+                if (isAgentSourceId(source.id) && destination != null) {
+                    writer.write("[${source.id}](<$destination>)\n\n")
+                }
+            }
+        }
+    }
+
+    private suspend fun writeLiteralBlock(writer: OutputStreamWriter, text: String) {
+        for (line in text.lineSequence()) {
+            currentCoroutineContext().ensureActive()
+            writer.write("    ")
+            var offset = 0
+            while (offset < line.length) {
+                currentCoroutineContext().ensureActive()
+                val length = minOf(8_192, line.length - offset)
+                writer.write(line, offset, length)
+                offset += length
+            }
+            writer.write("\n")
+        }
+        writer.write("\n")
     }
 
     private fun directory(): File {

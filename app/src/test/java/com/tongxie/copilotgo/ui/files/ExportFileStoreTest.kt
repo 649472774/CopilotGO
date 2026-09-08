@@ -2,6 +2,16 @@ package com.tongxie.copilotgo.ui.files
 
 import com.tongxie.copilotgo.data.chat.Session
 import com.tongxie.copilotgo.data.chat.UiMessage
+import com.tongxie.copilotgo.data.agent.AgentRunRecord
+import com.tongxie.copilotgo.data.agent.AgentRunStatus
+import com.tongxie.copilotgo.data.agent.AgentStepRecord
+import com.tongxie.copilotgo.data.agent.AgentToolCallRecord
+import com.tongxie.copilotgo.data.agent.AgentToolCallStatus
+import com.tongxie.copilotgo.data.agent.AgentToolResult
+import com.tongxie.copilotgo.data.agent.SourceKind
+import com.tongxie.copilotgo.data.agent.SourceReference
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlinx.coroutines.test.runTest
@@ -80,5 +90,68 @@ class ExportFileStoreTest {
         val result = store.writeMessage(UiMessage("emoji", "user", content))
         assertTrue(store.preview(result.name).text.contains(content))
         assertFalse(store.preview(result.name).truncated)
+    }
+
+    @Test fun agentExportPreservesActualOutcomesAndSourceProvenanceWithoutApprovalInternals() = runTest {
+        val store = ExportFileStore(temporary.root)
+        val run = AgentRunRecord(
+            id = "private-runtime-id", accountGeneration = 314, status = AgentRunStatus.INTERRUPTED,
+            steps = listOf(AgentStepRecord(0, toolCalls = listOf(AgentToolCallRecord(
+                id = "call", name = "controlled_tool", destination = "https://example.com/mcp",
+                arguments = buildJsonObject { put("query", "fixture only") },
+                status = AgentToolCallStatus.INTERRUPTED, outcomeUnknown = true,
+                result = AgentToolResult("partial actual result", truncated = true, outcomeUnknown = true)
+            )))),
+            sources = listOf(
+                SourceReference("https://example.com/search", "Search fixture", SourceKind.SEARCH_HIT, "S1"),
+                SourceReference("https://example.com/page", "Read fixture", SourceKind.FETCHED_PAGE, "S2")
+            )
+        )
+        val exported = store.writeMessage(UiMessage("message", "assistant", "partial answer", agentRun = run))
+        val text = store.file(exported.name).readText()
+        assertTrue(text.contains("partial answer"))
+        assertTrue(text.contains("Remote outcome unknown"))
+        assertTrue(text.contains("    partial actual result"))
+        assertTrue(text.contains("SEARCH_HIT S1"))
+        assertTrue(text.contains("FETCHED_PAGE S2"))
+        assertTrue(text.contains("https://example.com/page"))
+        assertTrue(text.contains("[S2](<https://example.com/page>)"))
+        assertFalse(text.contains("private-runtime-id"))
+        assertFalse(text.contains("accountGeneration"))
+        assertFalse(text.contains("approvalId"))
+    }
+
+    @Test fun ordinaryMessageExportShapeDoesNotChange() = runTest {
+        val store = ExportFileStore(temporary.root)
+        val exported = store.writeMessage(UiMessage("message", "assistant", "ordinary reply"))
+        assertEquals("## Copilot\n\nordinary reply\n\n", store.file(exported.name).readText())
+    }
+
+    @Test fun laterSourcesCannotRetroactivelyLinkEarlierUnresolvedOrCodeMarkers() = runTest {
+        val store = ExportFileStore(temporary.root)
+        val early = "Unknown [S1]\n\n`[S1]`\n\n```text\n[S1]\n```\n"
+        val later = "Later response [S1]\n\n`[S1]` stays literal."
+        val source = SourceReference(
+            "https://example.com/later", "Later actual source", SourceKind.FETCHED_PAGE, "S1", "later-call"
+        )
+        val session = Session(
+            "fixture", "Source ownership", "fixture-model",
+            messages = mutableListOf(
+                UiMessage("early", "assistant", early),
+                UiMessage(
+                    "later", "assistant", later,
+                    agentRun = AgentRunRecord("later-run", 7, AgentRunStatus.COMPLETED, sources = listOf(source))
+                )
+            )
+        )
+        val exported = store.writeSession(session)
+        val text = store.file(exported.name).readText()
+        assertTrue(text.startsWith("# Source ownership\n\n## Copilot\n\n$early\n\n## Copilot\n\n$later\n\n"))
+        assertFalse(Regex("(?m)^\\[S[0-9]+]:").containsMatchIn(text))
+        val inlineSource = "[S1](<https://example.com/later>)"
+        assertEquals(1, Regex(Regex.escape(inlineSource)).findAll(text).count())
+        assertTrue(text.indexOf(inlineSource) > text.indexOf("### Actual sources"))
+        assertEquals(early, session.messages.first().content)
+        assertEquals(later, session.messages.last().content)
     }
 }

@@ -1,6 +1,9 @@
 package com.tongxie.copilotgo
 
 import android.app.Application
+import com.tongxie.copilotgo.data.agent.AgentEngine
+import com.tongxie.copilotgo.data.agent.AgentModelTransport
+import com.tongxie.copilotgo.data.agent.AgentPromptBuilder
 import com.tongxie.copilotgo.data.auth.AuthRepository
 import com.tongxie.copilotgo.data.auth.CopilotTokenClient
 import com.tongxie.copilotgo.data.auth.DeviceFlowClient
@@ -12,7 +15,13 @@ import com.tongxie.copilotgo.data.net.ProxyAwareHttpClientProvider
 import com.tongxie.copilotgo.data.proxy.ProxyHealthChecker
 import com.tongxie.copilotgo.data.proxy.ProxySettingsStore
 import com.tongxie.copilotgo.data.storage.AppPaths
+import com.tongxie.copilotgo.data.storage.CredentialVault
 import com.tongxie.copilotgo.data.storage.SessionStore
+import com.tongxie.copilotgo.data.tools.ConfiguredToolExecutor
+import com.tongxie.copilotgo.data.tools.ToolSettingsStore
+import com.tongxie.copilotgo.data.tools.mcp.RemoteMcpService
+import com.tongxie.copilotgo.data.tools.net.ToolHttpClient
+import com.tongxie.copilotgo.data.tools.web.WebToolService
 import com.tongxie.copilotgo.data.update.UpdateChecker
 import com.tongxie.copilotgo.data.update.UpdatePrefs
 import kotlinx.coroutines.CoroutineScope
@@ -62,7 +71,7 @@ class AppContainer(app: CopilotGoApp) {
 
     val proxySettings = ProxySettingsStore(app)
 
-    private val providerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val httpProvider: HttpClientProvider = ProxyAwareHttpClientProvider(
         baseBuilder = {
@@ -75,7 +84,7 @@ class AppContainer(app: CopilotGoApp) {
                 .addInterceptor(logger)
         },
         proxyConfigFlow = proxySettings.config,
-        scope = providerScope,
+        scope = appScope,
         readiness = proxySettings.initialized,
         configurationError = proxySettings.loadError
     )
@@ -100,6 +109,18 @@ class AppContainer(app: CopilotGoApp) {
     val paths = AppPaths(app)
     val sessionStore = SessionStore(paths, json)
 
+    val toolHttp = ToolHttpClient(httpProvider)
+    val toolSettings = ToolSettingsStore(CredentialVault(app), appScope)
+    val remoteMcp = RemoteMcpService(toolSettings, toolHttp, appScope)
+    val webTools = WebToolService(toolSettings, toolHttp, remoteMcp)
+    val toolExecutor = ConfiguredToolExecutor(toolSettings, remoteMcp, webTools, appScope)
+    private val agentEngine = AgentEngine(
+        AgentModelTransport(chatClient::streamAgentChat),
+        toolExecutor,
+        AgentPromptBuilder(sessionStore.attachments),
+        json
+    )
+
     val appContext: android.content.Context = app.applicationContext
 
     val updatePrefs = UpdatePrefs(app)
@@ -111,5 +132,5 @@ class AppContainer(app: CopilotGoApp) {
     )
 
     /** Application-owned streaming; the session store remains the live state authority. */
-    val chatStreamCenter = ChatStreamCenter(sessionStore, chatClient)
+    val chatStreamCenter = ChatStreamCenter(sessionStore, chatClient, agentRunner = agentEngine)
 }

@@ -48,7 +48,13 @@ internal object MarkdownInlineParser {
                         }
                     }
                     if (isEscapable(text[i + 1])) {
-                        plain.append(text[i + 1])
+                        if (text[i + 1] == '[' || text[i + 1] == ']') {
+                            flush()
+                            result += MarkdownInline.Text(
+                                text[i + 1].toString(), formats, destination, allowsCitations = false
+                            )
+                            nodesLeft--
+                        } else plain.append(text[i + 1])
                         i += 2
                         continue
                     }

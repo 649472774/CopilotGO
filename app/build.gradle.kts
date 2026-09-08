@@ -12,8 +12,8 @@ android {
         applicationId = "com.tongxie.copilotgo"
         minSdk = 31
         targetSdk = 36
-        versionCode = 35
-        versionName = "0.2.0"
+        versionCode = 36
+        versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -47,12 +47,17 @@ android {
         }
     }
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    sourceSets {
+        getByName("test").kotlin.directories += "src/sharedTest/java"
+        getByName("androidTest").kotlin.directories += "src/sharedTest/java"
     }
     packaging {
         resources {
@@ -102,6 +107,11 @@ dependencies {
 
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+    implementation(libs.jsoup)
+    implementation(libs.networknt.json.schema) {
+        exclude(group = "com.fasterxml.jackson.dataformat", module = "jackson-dataformat-yaml")
+    }
+    coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
@@ -110,6 +120,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.mockwebserver)
+    testImplementation(libs.okhttp.tls)
     testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -117,4 +128,6 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation(libs.mockwebserver)
+    androidTestImplementation(libs.okhttp.tls)
 }

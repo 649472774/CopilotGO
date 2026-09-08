@@ -19,7 +19,8 @@ internal sealed interface MarkdownInline {
     data class Text(
         val text: String,
         val formats: Set<InlineFormat> = emptySet(),
-        val destination: String? = null
+        val destination: String? = null,
+        val allowsCitations: Boolean = true
     ) : MarkdownInline
 
     data class Math(val source: String, val original: String) : MarkdownInline
