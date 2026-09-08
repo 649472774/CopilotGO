@@ -240,6 +240,9 @@ fun ChatComposer(
                                 onClick = onSend,
                                 enabled = canSubmit && !sending,
                                 colors = IconButtonDefaults.filledIconButtonColors(
+                                    // A partial color override otherwise inherits the composer's foreground.
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
                                     disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                                 ),
