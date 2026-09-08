@@ -58,6 +58,7 @@ import com.tongxie.copilotgo.ui.files.exportShareIntent
 import com.tongxie.copilotgo.ui.viewmodel.LibraryFilesViewModel
 import com.tongxie.copilotgo.ui.viewmodel.LibraryResult
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -160,7 +161,7 @@ fun FilesScreen(
                                 stringResource(R.string.files_protected_hint),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(16.dp)
+                                modifier = Modifier.padding(AppLayout.PageGutter)
                             )
                         }
                         items(sessions, key = { it.id }) { session ->
@@ -178,7 +179,7 @@ fun FilesScreen(
                                     deleteError = null
                                 }
                             )
-                            HorizontalDivider()
+                            HorizontalDivider(Modifier.padding(horizontal = AppLayout.PageGutter))
                         }
                     }
                 }
@@ -205,7 +206,7 @@ fun FilesScreen(
                                 stringResource(R.string.files_export_retention),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(16.dp)
+                                modifier = Modifier.padding(AppLayout.PageGutter)
                             )
                         }
                         exports.error?.let { message ->
@@ -232,7 +233,7 @@ fun FilesScreen(
                                     deleteError = null
                                 }
                             )
-                            HorizontalDivider()
+                            HorizontalDivider(Modifier.padding(horizontal = AppLayout.PageGutter))
                         }
                     }
                 }
@@ -312,11 +313,11 @@ private fun FileRow(
     Row(
         Modifier.fillMaxWidth().heightIn(min = 72.dp)
             .clickable(enabled = enabled, onClick = onOpen)
-            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            .padding(start = AppLayout.PageGutter, end = 8.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(Icons.Default.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Icon(Icons.Default.Description, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

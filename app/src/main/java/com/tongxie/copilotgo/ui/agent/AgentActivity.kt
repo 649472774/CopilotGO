@@ -3,11 +3,13 @@ package com.tongxie.copilotgo.ui.agent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -15,12 +17,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,14 +72,25 @@ internal fun AgentRunIndicator(
     onReview: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val status = stringResource(agentRunLabel(run))
+    val count = remember(run.steps) { displayedAgentCalls(run).size }
     TextButton(
         onClick = onReview,
+        contentPadding = PaddingValues(vertical = 8.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (run.status == AgentRunStatus.FAILED || run.status == AgentRunStatus.INTERRUPTED)
+                MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+        ),
         modifier = modifier.sizeIn(minHeight = 48.dp).testTag(AgentTags.ACTIVITY)
+            .semantics { stateDescription = status }
     ) {
         Text(
-            stringResource(R.string.agent_activity_action, stringResource(agentRunLabel(run))),
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+            if (run.status == AgentRunStatus.COMPLETED && count > 0) stringResource(R.string.agent_activity_count, count)
+                else stringResource(R.string.agent_activity_action, status),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f, fill = false).semantics { liveRegion = LiveRegionMode.Polite }
         )
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -97,11 +114,11 @@ internal fun AgentToolbarActivity(run: AgentRunRecord, onReview: () -> Unit) {
 
 @Composable
 internal fun AgentMessageActivity(run: AgentRunRecord, onReview: (() -> Unit)?) {
-    val calls = remember(run.steps) { displayedAgentCalls(run) }
+    val calls = remember(run.steps) { attentionAgentCalls(run) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (onReview != null) AgentRunIndicator(run, onReview)
         else Text(stringResource(agentRunLabel(run)), style = MaterialTheme.typography.titleMedium)
-        calls.takeLast(3).forEach { call ->
+        calls.forEach { call ->
             Column(
                 Modifier.fillMaxWidth()
                     .then(if (onReview != null) Modifier.clickable(role = Role.Button, onClick = onReview) else Modifier)
@@ -112,7 +129,11 @@ internal fun AgentMessageActivity(run: AgentRunRecord, onReview: (() -> Unit)?) 
                     agentTextPreview(call.name, 160).text,
                     style = MaterialTheme.typography.labelLarge
                 )
-                Text(stringResource(agentCallLabel(call)), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    stringResource(agentCallLabel(call)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
         if (run.status == AgentRunStatus.INTERRUPTED) {

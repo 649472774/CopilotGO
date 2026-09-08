@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import com.tongxie.copilotgo.data.proxy.ProxyType
 import com.tongxie.copilotgo.ui.components.FeedbackBanner
 import com.tongxie.copilotgo.ui.components.PageScaffold
@@ -154,7 +155,7 @@ fun SettingsProxyScreen(
             else -> {
                 val validation = draft.validation
                 Column(
-                    pageModifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                    pageModifier.verticalScroll(rememberScrollState()).padding(AppLayout.PageGutter),
                     verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
                     SettingsSection(stringResource(R.string.settings_proxy_saved_title)) {
@@ -456,7 +457,7 @@ fun SettingsProxyScreen(
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                tonalElevation = 6.dp
+                tonalElevation = 0.dp
             ) {
                 Column(
                     Modifier.heightIn(max = maximumHeight).verticalScroll(rememberScrollState()).padding(24.dp),
@@ -464,7 +465,7 @@ fun SettingsProxyScreen(
                 ) {
                     Text(
                         stringResource(R.string.settings_proxy_leave_title),
-                        style = MaterialTheme.typography.headlineSmall,
+                        style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.semantics { heading() }
                     )
                     Text(stringResource(R.string.settings_proxy_leave_description))

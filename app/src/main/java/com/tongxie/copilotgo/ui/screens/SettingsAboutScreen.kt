@@ -27,6 +27,7 @@ import com.tongxie.copilotgo.ui.components.PageScaffold
 import com.tongxie.copilotgo.ui.components.UpdateDialog
 import com.tongxie.copilotgo.ui.settings.SettingsSection
 import com.tongxie.copilotgo.ui.viewmodel.UpdateViewModel
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 @Composable
 fun SettingsAboutScreen(updateVm: UpdateViewModel, onBack: () -> Unit) {
@@ -36,13 +37,13 @@ fun SettingsAboutScreen(updateVm: UpdateViewModel, onBack: () -> Unit) {
 
     PageScaffold(stringResource(R.string.settings_about_title), onBack) { pageModifier ->
         Column(
-            pageModifier.verticalScroll(rememberScrollState()).padding(24.dp),
+            pageModifier.verticalScroll(rememberScrollState()).padding(AppLayout.PageGutter),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     stringResource(R.string.settings_app_name),
-                    style = MaterialTheme.typography.headlineLarge,
+                    style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.semantics { heading() }
                 )
                 Text(
@@ -67,14 +68,14 @@ fun SettingsAboutScreen(updateVm: UpdateViewModel, onBack: () -> Unit) {
             SettingsSection(stringResource(R.string.settings_about_project_title)) {
                 Text(
                     stringResource(R.string.settings_about_project_detail),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             SettingsSection(stringResource(R.string.settings_about_disclaimer_title)) {
                 Text(
                     stringResource(R.string.settings_about_disclaimer_detail),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

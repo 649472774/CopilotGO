@@ -1,6 +1,7 @@
 package com.tongxie.copilotgo.ui.components
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -43,7 +44,10 @@ fun UpdateDialog(state: UpdateViewModel.State, vm: UpdateViewModel) {
                 onDismissRequest = vm::dismiss,
                 title = { Text("正在检查更新") },
                 text = {
-                    Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                    Column(
+                        Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Text(routeLabel(state.route))
                         LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 16.dp))
                         Text("网络检查超时为 30 秒，可随时取消。", modifier = Modifier.padding(top = 8.dp))
@@ -99,8 +103,16 @@ fun UpdateDialog(state: UpdateViewModel.State, vm: UpdateViewModel) {
                         "${formatSize(state.downloaded)} / ${formatSize(state.total)}",
                         modifier = Modifier.padding(top = 8.dp)
                     )
-                    Text(routeLabel(state.route), style = MaterialTheme.typography.bodySmall)
-                    Text("最多等待 5 分钟，取消会清理未完成的下载。", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        routeLabel(state.route),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "最多等待 5 分钟，取消会清理未完成的下载。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             },
             confirmButton = { ActionButton("取消下载", vm::dismiss) }

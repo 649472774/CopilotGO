@@ -26,6 +26,7 @@ import com.tongxie.copilotgo.data.storage.AppPaths
 import com.tongxie.copilotgo.ui.components.PageScaffold
 import com.tongxie.copilotgo.ui.components.ScreenState
 import com.tongxie.copilotgo.ui.settings.SettingsSection
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import com.tongxie.copilotgo.util.Logger
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -68,14 +69,14 @@ fun SettingsStorageScreen(
                 onAction = { retry++ }
             )
             is StoragePathsState.Loaded -> Column(
-                pageModifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                pageModifier.verticalScroll(rememberScrollState()).padding(AppLayout.PageGutter),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 SettingsSection(stringResource(R.string.settings_storage_paths)) {
                     SelectionContainer {
                         Text(
                             current.description,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyMedium,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -84,12 +85,12 @@ fun SettingsStorageScreen(
                 SettingsSection(stringResource(R.string.settings_storage_protected_title)) {
                     Text(
                         stringResource(R.string.settings_storage_protected_detail),
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
                         stringResource(R.string.settings_storage_manage_detail),
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

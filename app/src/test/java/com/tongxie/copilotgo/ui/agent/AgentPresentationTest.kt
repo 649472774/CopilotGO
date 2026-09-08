@@ -110,4 +110,25 @@ class AgentPresentationTest {
         assertEquals("1.25", agentDurationSeconds(1_250))
         assertEquals("180", agentDurationSeconds(180_000))
     }
+
+    @Test fun quietDisclosureNeverHidesApprovalFailureOrUnknownCalls() {
+        val successful = AgentToolCallRecord(
+            "ok", "fixture_read", kind = AgentToolKind.MCP, status = AgentToolCallStatus.SUCCEEDED
+        )
+        val pending = successful.copy(id = "pending", status = AgentToolCallStatus.AWAITING_APPROVAL)
+        val denied = successful.copy(id = "denied", status = AgentToolCallStatus.DENIED)
+        val failed = successful.copy(id = "failed", status = AgentToolCallStatus.FAILED)
+        val invalidated = successful.copy(id = "invalidated", status = AgentToolCallStatus.INVALIDATED)
+        val unknown = successful.copy(id = "unknown", outcomeUnknown = true)
+        val errorResult = successful.copy(id = "error", result = AgentToolResult("fixture error", isError = true))
+        val unknownResult = successful.copy(
+            id = "unknown-result", result = AgentToolResult("fixture uncertain", outcomeUnknown = true)
+        )
+        val attention = listOf(pending, denied, failed, invalidated, unknown, errorResult, unknownResult)
+        val record = run.copy(steps = listOf(AgentStepRecord(
+            0, toolCalls = attention + successful + successful.copy(id = "running", status = AgentToolCallStatus.RUNNING)
+        )))
+        assertEquals(attention, attentionAgentCalls(record))
+        assertEquals(attention.size + 2, displayedAgentCalls(record).size)
+    }
 }

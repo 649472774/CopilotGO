@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -51,10 +52,12 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.rememberTextMeasurer
 import com.tongxie.copilotgo.R
 import com.tongxie.copilotgo.ui.theme.AppLayout
 
 object ChatTags {
+    const val COMPOSER = "chat_composer"
     const val INPUT = "chat_input"
     const val EDITOR_VIEWPORT = "chat_editor_viewport"
     const val SEND = "chat_send"
@@ -87,6 +90,7 @@ fun ChatComposer(
     submissionEnabled: Boolean = true,
     compactHeight: Boolean = false,
     supportingText: String? = null,
+    hasNotice: Boolean = false,
     notice: @Composable () -> Unit = {}
 ) {
     var addMenu by remember { mutableStateOf(false) }
@@ -97,13 +101,33 @@ fun ChatComposer(
     val streamingDescription = stringResource(R.string.chat_draft_while_sending)
 
     Surface(
-        modifier = modifier.padding(horizontal = AppLayout.ComposerGutter, vertical = 8.dp),
+        modifier = modifier.testTag(ChatTags.COMPOSER).padding(horizontal = AppLayout.ComposerGutter, vertical = 8.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = AppLayout.ComposerShape
     ) {
         BoxWithConstraints(Modifier.padding(horizontal = 8.dp)) {
             val inlineActions = constraints.hasBoundedWidth && maxWidth >= 560.dp && maxHeight < 200.dp
             val boundedHeight = constraints.hasBoundedHeight
+            val density = LocalDensity.current
+            val editorStyle = MaterialTheme.typography.bodyLarge
+            val textMeasurer = rememberTextMeasurer(cacheSize = 8)
+            val compactTextWidth = (constraints.maxWidth - with(density) {
+                (AppLayout.ControlSize * 3 + 8.dp * 3 + 16.dp).roundToPx()
+            }).coerceAtLeast(0)
+            val canUseCompactRow = !inlineActions && constraints.hasBoundedWidth && maxWidth >= 320.dp &&
+                density.fontScale <= 1.2f && attachments.isEmpty() && !importing && !hasNotice &&
+                supportingText == null && enabled && text.length <= 128 && '\n' !in text && '\r' !in text
+            // Measure only bounded short drafts at the candidate width; using the current editor's
+            // line count would oscillate between narrow and expanded layouts as a line wraps.
+            val compactRow = remember(canUseCompactRow, text, compactTextWidth, editorStyle, density) {
+                canUseCompactRow && !textMeasurer.measure(
+                    text = text,
+                    style = editorStyle,
+                    maxLines = 1,
+                    constraints = Constraints(maxWidth = compactTextWidth)
+                ).hasVisualOverflow
+            }
+            val singleRow = compactRow || inlineActions
             val editorScroll = rememberScrollState()
             Layout(
                 content = {
@@ -134,10 +158,10 @@ fun ChatComposer(
                             value = text,
                             onValueChange = onTextChange,
                             enabled = canEdit,
-                            maxLines = if (inlineActions) 1 else if (compactHeight) 2 else 6,
+                            maxLines = if (singleRow) 1 else if (compactHeight) 2 else 6,
                             interactionSource = editorInteraction,
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            textStyle = editorStyle.copy(
                                 color = MaterialTheme.colorScheme.onSurface
                             ),
                             modifier = Modifier.fillMaxWidth().testTag(ChatTags.INPUT)
@@ -147,13 +171,16 @@ fun ChatComposer(
                                     if (sending) stateDescription = streamingDescription
                                 },
                             decorationBox = { innerTextField ->
-                                Box(Modifier.padding(horizontal = 8.dp, vertical = if (inlineActions) 4.dp else 8.dp)) {
+                                Box(
+                                    Modifier.padding(horizontal = 8.dp, vertical = if (singleRow) 4.dp else 8.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
                                     if (text.isEmpty()) {
                                         Text(
                                             stringResource(R.string.chat_input_hint),
                                             style = MaterialTheme.typography.bodyLarge,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = if (inlineActions) 1 else 2
+                                            maxLines = if (singleRow) 1 else 2
                                         )
                                     }
                                     innerTextField()
@@ -235,7 +262,11 @@ fun ChatComposer(
                 }
             ) { measurables, available ->
                 val gap = if (inlineActions) 8.dp.roundToPx() else 0
-                val padding = if (inlineActions) 0 else 8.dp.roundToPx()
+                val padding = when {
+                    inlineActions -> 0
+                    compactRow -> 4.dp.roundToPx()
+                    else -> 8.dp.roundToPx()
+                }
                 val contentHeight = if (boundedHeight) {
                     (available.maxHeight - padding * 2).coerceAtLeast(0)
                 } else Constraints.Infinity
@@ -247,8 +278,12 @@ fun ChatComposer(
                     maxWidth = actionsWidth,
                     maxHeight = contentHeight
                 ))
-                val editorWidth = if (inlineActions) available.maxWidth - actions.width - gap else available.maxWidth
-                val editorHeight = if (!boundedHeight || inlineActions) contentHeight
+                val editorWidth = when {
+                    compactRow -> available.maxWidth - (AppLayout.ControlSize * 3 + 8.dp * 3).roundToPx()
+                    inlineActions -> available.maxWidth - actions.width - gap
+                    else -> available.maxWidth
+                }
+                val editorHeight = if (!boundedHeight || singleRow) contentHeight
                     else (contentHeight - actions.height - gap).coerceAtLeast(0)
                 val editor = measurables[0].measure(Constraints(
                     minWidth = if (available.hasBoundedWidth) editorWidth else 0,
@@ -259,14 +294,19 @@ fun ChatComposer(
                     if (inlineActions) editor.width + gap + actions.width else maxOf(editor.width, actions.width)
                 )
                 val height = available.constrainHeight(
-                    (if (inlineActions) maxOf(editor.height, actions.height) else editor.height + gap + actions.height) +
+                    (if (singleRow) maxOf(editor.height, actions.height) else editor.height + gap + actions.height) +
                         padding * 2
                 )
                 // Move the same editor node rather than recreate it when the IME changes available space.
                 layout(width, height) {
-                    editor.placeRelative(0, padding)
-                    if (inlineActions) actions.placeRelative(editor.width + gap, height - actions.height - padding)
-                    else actions.placeRelative(0, padding + editor.height + gap)
+                    if (compactRow) {
+                        editor.placeRelative((AppLayout.ControlSize + 8.dp).roundToPx(), padding)
+                        actions.placeRelative(0, height - actions.height - padding)
+                    } else {
+                        editor.placeRelative(0, padding)
+                        if (inlineActions) actions.placeRelative(editor.width + gap, height - actions.height - padding)
+                        else actions.placeRelative(0, padding + editor.height + gap)
+                    }
                 }
             }
         }
