@@ -25,10 +25,13 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -159,8 +162,7 @@ class VisualGalleryAcceptanceTest {
         rule.onNodeWithTag(ChatTags.INPUT).assertIsDisplayed()
         rule.onNodeWithTag(ChatTags.ADD).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         if (!empty) {
-            rule.onNodeWithTag(ChatTags.MESSAGES).performScrollToIndex(0)
-            rule.waitForIdle()
+            scrollToReadingStart()
             rule.onNodeWithTag("agent-message-body-gallery-question").assertIsDisplayed()
         }
         saveScreenshot("visual-${if (empty) "empty" else "conversation"}-${themeName(dark)}")
@@ -178,11 +180,13 @@ class VisualGalleryAcceptanceTest {
         )
         val opened = mutableListOf<String>()
         setGalleryContent(dark) { GalleryChat(session, onOpenSource = { opened += it }) }
-        rule.onNodeWithTag(ChatTags.MESSAGES).performScrollToIndex(0)
-        rule.waitForIdle()
+        scrollToReadingStart()
+        rule.onNodeWithTag("agent-message-body-gallery-question").assertIsDisplayed()
         saveScreenshot("visual-markdown-start-${themeName(dark)}")
         rule.onNodeWithTag(ChatTags.MESSAGES).performScrollToIndex(1)
         rule.waitForIdle()
+        rule.onNodeWithText("取消是一种协作").assertIsDisplayed()
+        rule.onNodeWithText("一个最小例子").assertIsDisplayed()
         saveScreenshot("visual-markdown-body-${themeName(dark)}")
         rule.onNodeWithTag(ChatTags.MESSAGES).performScrollToIndex(session.messages.size)
         rule.waitForIdle()
@@ -190,6 +194,13 @@ class VisualGalleryAcceptanceTest {
         saveScreenshot("visual-markdown-sources-${themeName(dark)}")
         rule.onNodeWithTag("agent-source-S2").performClick()
         rule.runOnIdle { assertEquals(listOf(SOURCES[1].url), opened) }
+    }
+
+    private fun scrollToReadingStart() {
+        // A real reading gesture relinquishes follow-tail before semantic positioning.
+        rule.onNodeWithTag(ChatTags.MESSAGES).performTouchInput { swipeDown() }
+        rule.onNodeWithTag(ChatTags.MESSAGES).performScrollToIndex(0)
+        rule.waitForIdle()
     }
 
     private fun captureHistory(dark: Boolean) {
