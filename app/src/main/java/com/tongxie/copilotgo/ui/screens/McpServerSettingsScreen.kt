@@ -14,7 +14,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,6 +40,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import com.tongxie.copilotgo.data.tools.CredentialUpdate
 import com.tongxie.copilotgo.data.tools.McpAuthMode
 import com.tongxie.copilotgo.data.tools.McpNetworkTrust
@@ -160,7 +160,7 @@ fun McpServerSettingsScreen(
             )
             else -> LazyColumn(
                 modifier = pageModifier.imePadding().testTag("tool-mcp-settings"),
-                contentPadding = PaddingValues(20.dp),
+                contentPadding = PaddingValues(AppLayout.PageGutter),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 item {
@@ -369,7 +369,7 @@ fun McpServerSettingsScreen(
                     }
                 }
                 item {
-                    OutlinedButton(
+                    TextButton(
                         onClick = {
                             focus.clearFocus()
                             viewModel.cancelDiscovery()

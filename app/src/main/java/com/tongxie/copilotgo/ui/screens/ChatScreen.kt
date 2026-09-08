@@ -694,6 +694,7 @@ fun ChatContent(
                             enabled = !draft.loading && !draft.loadFailed,
                             submissionEnabled = canSubmit,
                             compactHeight = compactHeight,
+                            hasNotice = draft.loadFailed || draft.saveFailed,
                             supportingText = when {
                                 draft.loading -> stringResource(R.string.draft_loading)
                                 changingModel -> stringResource(R.string.model_changing)

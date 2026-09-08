@@ -42,7 +42,7 @@ fun SettingsToggleRow(
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(
                 detail,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -88,7 +88,7 @@ fun SettingsChoiceRow(
             Text(title, style = MaterialTheme.typography.titleMedium)
             Text(
                 detail,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tongxie.copilotgo.BuildConfig
@@ -125,7 +127,7 @@ fun SettingsScreen(
 
     PageScaffold(stringResource(R.string.settings_title), onBack, snackbar) { pageModifier ->
         Column(
-            pageModifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 12.dp),
+            pageModifier.verticalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SettingsMenuRow(Icons.Filled.AccountCircle, stringResource(R.string.settings_account_title), accountSummary, onOpenAccount)
@@ -210,9 +212,21 @@ private fun SettingsMenuRow(icon: ImageVector, title: String, subtitle: String, 
         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).sizeIn(minHeight = 64.dp),
         headlineContent = { Text(title, style = MaterialTheme.typography.titleMedium) },
         supportingContent = {
-            Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
         },
-        leadingContent = { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        leadingContent = {
+            Icon(
+                icon, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
+        },
         trailingContent = {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,

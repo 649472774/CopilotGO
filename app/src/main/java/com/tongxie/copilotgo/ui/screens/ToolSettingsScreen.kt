@@ -10,7 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,6 +34,7 @@ import com.tongxie.copilotgo.ui.settings.currentToolDiscovery
 import com.tongxie.copilotgo.ui.settings.rememberToolSettingsFeedback
 import com.tongxie.copilotgo.ui.settings.toolSettingsProblemMessage
 import com.tongxie.copilotgo.ui.viewmodel.ToolSettingsViewModel
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 @Composable
 fun ToolSettingsScreen(
@@ -65,7 +66,7 @@ fun ToolSettingsScreen(
             )
             else -> LazyColumn(
                 modifier = pageModifier.testTag("tool-settings-list"),
-                contentPadding = PaddingValues(20.dp),
+                contentPadding = PaddingValues(AppLayout.PageGutter),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 item {
@@ -103,7 +104,7 @@ fun ToolSettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        OutlinedButton(
+                        TextButton(
                             onClick = onOpenSearch,
                             modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).testTag("tool-open-search")
                         ) { Text(stringResource(R.string.tool_settings_search_open)) }
@@ -141,18 +142,19 @@ fun ToolSettingsScreen(
                         Text(server.endpoint, style = MaterialTheme.typography.bodyLarge)
                         Text(
                             stringResource(R.string.tool_settings_server_revision, server.revision),
-                            style = MaterialTheme.typography.bodyLarge
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
                             stringResource(
                                 if (server.credentialState == ToolCredentialState.CONFIGURED) R.string.tool_settings_credential_configured
                                 else R.string.tool_settings_credential_missing
                             ),
-                            style = MaterialTheme.typography.bodyLarge
+                            style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
                             stringResource(R.string.tool_settings_server_selection, server.enabledTools.size),
-                            style = MaterialTheme.typography.bodyLarge
+                            style = MaterialTheme.typography.bodyMedium
                         )
                         val discovery = discoveries[server.id]
                         val report = currentToolDiscovery(server, discovery)
@@ -179,7 +181,7 @@ fun ToolSettingsScreen(
                             }
                             else -> Text(stringResource(R.string.tool_settings_discovery_unchecked))
                         }
-                        OutlinedButton(
+                        TextButton(
                             onClick = { onEditServer(server.id) },
                             modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
                                 .testTag("tool-edit-server-${server.id}")

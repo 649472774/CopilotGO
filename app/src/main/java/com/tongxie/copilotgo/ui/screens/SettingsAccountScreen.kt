@@ -12,7 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +32,7 @@ import com.tongxie.copilotgo.ui.components.ScreenState
 import com.tongxie.copilotgo.ui.settings.SettingsSection
 import com.tongxie.copilotgo.ui.viewmodel.AccountActionsViewModel
 import com.tongxie.copilotgo.ui.viewmodel.AuthViewModel
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 @Composable
 fun SettingsAccountScreen(
@@ -66,7 +67,7 @@ fun SettingsAccountScreen(
             )
         } else {
             Column(
-                pageModifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                pageModifier.verticalScroll(rememberScrollState()).padding(AppLayout.PageGutter),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 SettingsSection(stringResource(R.string.settings_account_native)) {
@@ -95,7 +96,7 @@ fun SettingsAccountScreen(
                     }
                     Text(
                         stringResource(R.string.settings_account_remote_note),
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -114,13 +115,13 @@ fun SettingsAccountScreen(
                 }
                 Text(
                     stringResource(R.string.settings_account_logout_description),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedButton(
+                TextButton(
                     onClick = actionsVm::confirm,
                     enabled = !working && state != AuthState.NotLoggedIn,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp)
                 ) {
                     Text(stringResource(

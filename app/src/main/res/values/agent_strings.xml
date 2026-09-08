@@ -40,6 +40,7 @@
     <string name="agent_review_pending_short">待确认</string>
     <string name="agent_tools_short">工具</string>
     <string name="agent_activity_action">%1$s · 查看工具</string>
+    <string name="agent_activity_count">%1$d 项工具活动</string>
     <string name="agent_activity_not_reasoning">显示本次任务提出的工具、执行状态与实际返回内容。提出调用并不代表已经执行。</string>
     <string name="agent_leave_running">可以返回会话或离开此页，允许的任务会继续。需要结束时请点“停止”。</string>
     <string name="agent_generating">正在生成回复</string>

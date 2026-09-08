@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -29,9 +30,11 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -40,6 +43,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.Density
@@ -60,6 +64,7 @@ import com.tongxie.copilotgo.data.storage.SessionStore
 import com.tongxie.copilotgo.ui.components.ChatComposer
 import com.tongxie.copilotgo.ui.components.ChatTags
 import com.tongxie.copilotgo.ui.components.ConfirmActionDialog
+import com.tongxie.copilotgo.ui.components.FeedbackBanner
 import com.tongxie.copilotgo.ui.components.ModelPickerInline
 import com.tongxie.copilotgo.ui.components.UiAttachment
 import com.tongxie.copilotgo.ui.draft.ChatDraftStore
@@ -117,7 +122,92 @@ class NativeUiAcceptanceTest {
         rule.onNodeWithTag(ChatTags.INPUT).assertWidthIsAtLeast(280.dp)
         rule.onNodeWithTag(ChatTags.SEND).assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
         rule.onNodeWithTag(ChatTags.ADD).assertHeightIsAtLeast(48.dp).assertHasClickAction()
+        rule.onNodeWithTag(ChatTags.VOICE).assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).assertHasClickAction()
         saveScreenshot("composer-light-200")
+    }
+
+    @Test fun composerGeometryChangesKeepTheSameFocusedEditorAndMultilineDraft() {
+        val text = mutableStateOf("第一行\nSecond line")
+        val compact = mutableStateOf(false)
+        rule.setContent {
+            FixtureTheme {
+                ChatComposer(
+                    text = text.value,
+                    attachments = emptyList(),
+                    onTextChange = { text.value = it },
+                    onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
+                    onRemoveAttachment = {}, onPreviewAttachment = {},
+                    modifier = Modifier.fillMaxWidth().heightIn(max = if (compact.value) 160.dp else 320.dp),
+                    compactHeight = compact.value
+                )
+            }
+        }
+        rule.onNodeWithTag(ChatTags.INPUT).performClick().assertIsFocused()
+        val editorId = rule.onNodeWithTag(ChatTags.INPUT).fetchSemanticsNode().id
+        rule.runOnIdle { compact.value = true }
+        rule.onNodeWithTag(ChatTags.INPUT).assertIsFocused()
+        assertEquals(editorId, rule.onNodeWithTag(ChatTags.INPUT).fetchSemanticsNode().id)
+        rule.runOnIdle {
+            assertEquals("第一行\nSecond line", text.value)
+            compact.value = false
+        }
+        rule.onNodeWithTag(ChatTags.INPUT).assertIsFocused()
+        assertEquals(editorId, rule.onNodeWithTag(ChatTags.INPUT).fetchSemanticsNode().id)
+        rule.runOnIdle { assertEquals("第一行\nSecond line", text.value) }
+    }
+
+    @Test fun shortComposerExpandsWithoutReplacingItsTouchFocusedEditor() {
+        val text = mutableStateOf("")
+        rule.setContent { FixtureTheme { FixtureComposer(text) } }
+        val composer = rule.onNodeWithTag(ChatTags.COMPOSER)
+        val compactWidth = with(rule.density) { composer.fetchSemanticsNode().size.width.toDp() } >= 360.dp
+        fun assertCompactHeight() {
+            val height = composer.fetchSemanticsNode().size.height
+            assertTrue("The complete compact composer must fit within 74 dp", height <= with(rule.density) { 74.dp.toPx() })
+        }
+        if (compactWidth) assertCompactHeight()
+        val editor = rule.onNodeWithTag(ChatTags.INPUT)
+        editor.performTouchInput { click(center) }.assertIsFocused()
+        val editorId = editor.fetchSemanticsNode().id
+        editor.performTextReplacement("第一行\nSecond line")
+        editor.assertIsFocused()
+        assertEquals(editorId, editor.fetchSemanticsNode().id)
+        composer.assertHeightIsAtLeast(112.dp)
+        rule.runOnIdle { assertEquals("第一行\nSecond line", text.value) }
+        editor.performTextReplacement("Hi")
+        editor.assertIsFocused()
+        assertEquals(editorId, editor.fetchSemanticsNode().id)
+        if (compactWidth) {
+            assertCompactHeight()
+            val input = editor.fetchSemanticsNode().boundsInRoot
+            val add = rule.onNodeWithTag(ChatTags.ADD).fetchSemanticsNode().boundsInRoot
+            val voice = rule.onNodeWithTag(ChatTags.VOICE).fetchSemanticsNode().boundsInRoot
+            assertTrue("The compact editor must not overlap attachment or voice targets", input.left >= add.right && input.right <= voice.left)
+        }
+    }
+
+    @Test fun recoveryNoticeKeepsTheWideEditorAndItsRetryAction() {
+        val retries = AtomicInteger()
+        rule.setContent {
+            FixtureTheme {
+                ChatComposer(
+                    text = "Draft",
+                    attachments = emptyList(),
+                    onTextChange = {}, onSend = {}, onStop = {}, onPickText = {}, onPickImages = {}, onVoice = {},
+                    onRemoveAttachment = {}, onPreviewAttachment = {},
+                    hasNotice = true,
+                    notice = {
+                        FeedbackBanner(
+                            "Controlled recovery notice", isError = true,
+                            actionLabel = "Retry fixture", onAction = { retries.incrementAndGet() }
+                        )
+                    }
+                )
+            }
+        }
+        rule.onNodeWithTag(ChatTags.INPUT).assertWidthIsAtLeast(280.dp)
+        rule.onNodeWithText("Retry fixture").performScrollTo().assertIsDisplayed().performClick()
+        rule.runOnIdle { assertEquals(1, retries.get()) }
     }
 
     @Test fun textOnlyAttachmentsCanSendAndRemovalIsNamed() {
@@ -213,6 +303,8 @@ class NativeUiAcceptanceTest {
                 )
             }
         }
+        rule.onNodeWithContentDescription(rule.activity.getString(com.tongxie.copilotgo.R.string.composer_stop))
+            .assertHasClickAction().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
         rule.onNodeWithTag(ChatTags.STOP).assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         rule.onNodeWithTag(ChatTags.STOP).assertDoesNotExist()
         rule.onNodeWithTag(ChatTags.SEND).assertIsEnabled()

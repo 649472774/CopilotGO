@@ -7,13 +7,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -23,9 +22,12 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.automirrored.filled.WrapText
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -66,6 +68,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -81,6 +84,7 @@ import com.tongxie.copilotgo.ui.markdown.TableAlignment
 import com.tongxie.copilotgo.ui.markdown.rememberLatexRender
 import com.tongxie.copilotgo.ui.markdown.rememberMarkdownDocument
 import kotlinx.coroutines.CancellationException
+import com.tongxie.copilotgo.ui.theme.AppLayout
 
 /**
  * Native, selectable Markdown. Parsing is bounded and off Main, with conflated streaming updates.
@@ -350,30 +354,46 @@ private fun InlineText(
     Text(annotated, style = style, inlineContent = inlineImages, softWrap = true)
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MarkdownCode(block: MarkdownBlock.Code, onFeedback: (String) -> Unit) {
     var wrap by rememberSaveable { mutableStateOf(true) }
     val clipboard = LocalClipboardManager.current
     val colors = MaterialTheme.colorScheme
     Column(
-        Modifier.clip(MaterialTheme.shapes.small).background(colors.surfaceContainer),
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(colors.surfaceContainer),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         DisableSelection {
             Column(
-                Modifier.background(colors.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                PlainChunks(
-                    if (block.language.isBlank()) listOf("代码") else block.languageChunks,
-                    MaterialTheme.typography.labelLarge.copy(color = colors.onSurfaceVariant)
-                )
-                FlowRow(
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
+                    Text(
+                        block.languageChunks.firstOrNull()?.ifBlank { "代码" } ?: "代码",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconToggleButton(
+                        checked = wrap,
+                        onCheckedChange = { wrap = it },
+                        colors = IconButtonDefaults.iconToggleButtonColors(
+                            checkedContentColor = colors.onSurface,
+                            checkedContainerColor = colors.surfaceContainerHigh,
+                            contentColor = colors.onSurfaceVariant
+                        ),
+                        modifier = Modifier.size(AppLayout.ControlSize).testTag("markdown-code-wrap")
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.WrapText, contentDescription = "自动换行")
+                    }
+                    IconButton(
                         onClick = {
                             val message = when (copyText(clipboard, block.code)) {
                                 TextCopyResult.Copied -> "已复制代码"
@@ -382,23 +402,17 @@ private fun MarkdownCode(block: MarkdownBlock.Code, onFeedback: (String) -> Unit
                             }
                             onFeedback(message)
                         },
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("markdown-code-copy")
+                        colors = IconButtonDefaults.iconButtonColors(contentColor = colors.onSurfaceVariant),
+                        modifier = Modifier.size(AppLayout.ControlSize).testTag("markdown-code-copy")
                     ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("复制代码", modifier = Modifier.weight(1f, fill = false))
+                        Icon(Icons.Default.ContentCopy, contentDescription = "复制代码")
                     }
-                    FilterChip(
-                        selected = wrap,
-                        onClick = { wrap = !wrap },
-                        label = { Text("自动换行") },
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("markdown-code-wrap")
-                    )
                 }
                 if (!wrap) Text(
                     "横向阅读；超长行仍会折行。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant
+                    color = colors.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp)
                 )
             }
         }

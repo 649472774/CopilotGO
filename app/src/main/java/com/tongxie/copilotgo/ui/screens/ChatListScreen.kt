@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -34,10 +35,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Surface
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationRail
@@ -62,6 +62,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -70,6 +73,7 @@ import com.tongxie.copilotgo.data.chat.SessionSummary
 import com.tongxie.copilotgo.ui.components.ConfirmActionDialog
 import com.tongxie.copilotgo.ui.components.FeedbackBanner
 import com.tongxie.copilotgo.ui.components.ScreenState
+import com.tongxie.copilotgo.ui.components.SearchInput
 import com.tongxie.copilotgo.ui.components.SessionListRow
 import com.tongxie.copilotgo.ui.components.UpdateDialog
 import com.tongxie.copilotgo.ui.files.exportShareIntent
@@ -77,6 +81,7 @@ import com.tongxie.copilotgo.ui.viewmodel.LibraryFilesViewModel
 import com.tongxie.copilotgo.ui.viewmodel.LibraryResult
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
 import com.tongxie.copilotgo.ui.viewmodel.UpdateViewModel
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import kotlinx.coroutines.launch
 
 @Composable
@@ -258,7 +263,14 @@ fun SessionListContent(
             topBar = {
                 Column {
                     TopAppBar(
-                        title = { Text("CopilotGo", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        title = {
+                            Text(
+                                stringResource(R.string.settings_app_name),
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                         actions = {
                             IconButton(onClick = {
@@ -269,6 +281,20 @@ fun SessionListContent(
                                     if (searchVisible) Icons.Default.Close else Icons.Default.Search,
                                     stringResource(if (searchVisible) R.string.session_search_close else R.string.session_search)
                                 )
+                            }
+                            val newLabel = stringResource(R.string.chat_new)
+                            val busyLabel = stringResource(R.string.library_working)
+                            IconButton(
+                                onClick = onNew,
+                                enabled = !busy,
+                                modifier = Modifier.size(AppLayout.ControlSize).testTag("new_session")
+                                    .semantics {
+                                        contentDescription = newLabel
+                                        if (busy) stateDescription = busyLabel
+                                    }
+                            ) {
+                                if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Default.Add, contentDescription = null)
                             }
                             if (!expanded) {
                                 Box {
@@ -297,41 +323,26 @@ fun SessionListContent(
                         }
                     )
                     if (searchVisible) {
-                        OutlinedTextField(
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        SearchInput(
                             value = search,
                             onValueChange = {
                                 searchLimitReached = it.length > 256
                                 if (!searchLimitReached) search = it
                             },
-                            singleLine = true,
                             isError = searchLimitReached,
-                            supportingText = if (searchLimitReached) ({ Text(stringResource(R.string.search_limit)) }) else null,
-                            label = { Text(stringResource(R.string.session_search_hint)) },
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                            supportingText = if (searchLimitReached) stringResource(R.string.search_limit) else null,
+                            label = stringResource(R.string.session_search_hint),
+                            modifier = Modifier.widthIn(max = AppLayout.PageWidth).fillMaxWidth()
+                                .padding(horizontal = AppLayout.PageGutter, vertical = 8.dp)
                                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                                 .testTag("session_search")
                         )
+                        }
                     }
                 }
             },
-            snackbarHost = { SnackbarHost(snackbar) },
-            floatingActionButton = {
-                if (busy) {
-                    Surface(
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = androidx.compose.material3.MaterialTheme.shapes.large
-                    ) {
-                        Text(stringResource(R.string.library_working), Modifier.padding(16.dp))
-                    }
-                } else {
-                    ExtendedFloatingActionButton(
-                        onClick = onNew,
-                        icon = { Icon(Icons.Default.Add, null) },
-                        text = { Text(stringResource(R.string.chat_new)) },
-                        modifier = Modifier.testTag("new_session")
-                    )
-                }
-            }
+            snackbarHost = { SnackbarHost(snackbar) }
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 if (expanded) {
@@ -363,7 +374,7 @@ fun SessionListContent(
                     }
                 }
                 Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-                    Column(Modifier.widthIn(max = 960.dp).fillMaxSize()) {
+                    Column(Modifier.widthIn(max = AppLayout.PageWidth).fillMaxSize()) {
                         if (loading && sessions.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
                         error?.let {
                             FeedbackBanner(it, isError = true, actionLabel = stringResource(R.string.action_retry), onAction = onReload)
@@ -376,8 +387,10 @@ fun SessionListContent(
                             )
                             sessions.isEmpty() && error == null -> ScreenState(
                                 stringResource(R.string.session_empty_title),
-                                Modifier.fillMaxSize().padding(bottom = 88.dp),
-                                detail = stringResource(R.string.session_empty_hint)
+                                Modifier.fillMaxSize(),
+                                detail = stringResource(R.string.session_empty_hint),
+                                actionLabel = stringResource(R.string.chat_new),
+                                onAction = if (busy) null else onNew
                             )
                             filtered.isEmpty() && sessions.isNotEmpty() -> ScreenState(
                                 stringResource(R.string.session_no_match),
@@ -387,7 +400,7 @@ fun SessionListContent(
                             )
                             else -> LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(bottom = 96.dp)
+                                contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
                             ) {
                                 items(filtered, key = { it.id }, contentType = { "session" }) { session ->
                                     SessionListRow(
@@ -399,7 +412,6 @@ fun SessionListContent(
                                         onShare = { onShare(session) },
                                         onDeleteRequest = { onDeleteRequest(session) }
                                     )
-                                    HorizontalDivider()
                                 }
                             }
                         }

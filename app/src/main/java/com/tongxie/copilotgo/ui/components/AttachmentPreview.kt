@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -24,7 +25,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -69,10 +70,12 @@ fun AttachmentStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(attachments, key = { it.id }) { attachment ->
-            OutlinedCard(
+            Surface(
                 onClick = { onPreview(attachment) },
                 enabled = enabled,
-                modifier = Modifier.width(if (compact) 208.dp else 176.dp)
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.width(if (compact) 208.dp else 176.dp).sizeIn(minHeight = 48.dp)
             ) {
                 Column {
                     if (attachment.isImage && !compact) {

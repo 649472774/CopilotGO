@@ -32,6 +32,16 @@ internal fun displayedAgentCalls(run: AgentRunRecord): List<AgentToolCallRecord>
     run.steps.take(12).flatMap { it.toolCalls.take(MAX_DISPLAYED_AGENT_CALLS) }
         .take(MAX_DISPLAYED_AGENT_CALLS)
 
+internal fun attentionAgentCalls(run: AgentRunRecord): List<AgentToolCallRecord> =
+    displayedAgentCalls(run).filter { call ->
+        call.outcomeUnknown || call.result?.outcomeUnknown == true || call.result?.isError == true ||
+            call.status in setOf(
+                AgentToolCallStatus.AWAITING_APPROVAL, AgentToolCallStatus.FAILED,
+                AgentToolCallStatus.DENIED, AgentToolCallStatus.INVALIDATED,
+                AgentToolCallStatus.INTERRUPTED, AgentToolCallStatus.CANCELLED
+            )
+    }
+
 @StringRes
 internal fun agentModelDisabledReason(model: ModelInfo?): Int? = when {
     model == null -> R.string.agent_model_missing

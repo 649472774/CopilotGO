@@ -139,77 +139,81 @@ fun MessageBubble(
                     .testTag("agent-message-sources-${message.id}"),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(stringResource(R.string.agent_sources_title), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.agent_sources_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 run.sources.take(4).forEach { source ->
-                    AgentSourceRow(source, onOpenAgentSource ?: openSource)
+                    AgentSourceRow(source, onOpenAgentSource ?: openSource, compact = true)
                 }
                 if (run.sources.size > 4 && onReviewAgent != null) {
                     TextButton(onClick = { onReviewAgent(run) }) {
                         Text(stringResource(R.string.agent_sources_more, run.sources.size))
                     }
                 }
-                Row(
-                    modifier = Modifier.padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            }
+        }
+        Row(
+            modifier = Modifier.padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (message.content.isNotEmpty()) {
+                IconButton(onClick = copyMessage, colors = colors, modifier = Modifier.size(AppLayout.ControlSize)) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.message_copy, author))
+                }
+            }
+            Box {
+                IconButton(
+                    onClick = { menuOpen = true },
+                    colors = colors,
+                    modifier = Modifier.size(AppLayout.ControlSize)
                 ) {
-                    val colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (message.content.isNotEmpty()) {
-                        IconButton(onClick = copyMessage, colors = colors, modifier = Modifier.size(AppLayout.ControlSize)) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.message_copy, author))
-                        }
+                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.message_actions, author))
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (onShare != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.message_share)) },
+                            onClick = { menuOpen = false; onShare() }
+                        )
                     }
-                    Box {
-                        IconButton(
-                            onClick = { menuOpen = true },
-                            colors = colors,
-                            modifier = Modifier.size(AppLayout.ControlSize)
-                        ) {
-                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.message_actions, author))
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            if (onShare != null) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.message_share)) },
-                                    onClick = { menuOpen = false; onShare() }
-                                )
-                            }
-                            onRegenerate?.let { regenerate ->
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.message_regenerate)) },
-                                    enabled = actionsEnabled && !replayBlocked,
-                                    onClick = { menuOpen = false; regenerate() }
-                                )
-                            }
-                            onEdit?.let { edit ->
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.message_edit)) },
-                                    enabled = actionsEnabled && !replayBlocked,
-                                    onClick = { menuOpen = false; edit() }
-                                )
-                            }
-                            onDelete?.let { delete ->
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_delete)) },
-                                    enabled = actionsEnabled && !replayBlocked,
-                                    onClick = { menuOpen = false; delete() }
-                                )
-                            }
-                            if (!actionsEnabled) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.message_actions_busy)) },
-                                    enabled = false,
-                                    onClick = {}
-                                )
-                            }
-                            if (replayBlocked && (onEdit != null || onRegenerate != null)) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.agent_protected_history)) },
-                                    enabled = false,
-                                    onClick = {}
-                                )
-                            }
-                        }
+                    onRegenerate?.let { regenerate ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.message_regenerate)) },
+                            enabled = actionsEnabled && !replayBlocked,
+                            onClick = { menuOpen = false; regenerate() }
+                        )
+                    }
+                    onEdit?.let { edit ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.message_edit)) },
+                            enabled = actionsEnabled && !replayBlocked,
+                            onClick = { menuOpen = false; edit() }
+                        )
+                    }
+                    onDelete?.let { delete ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_delete)) },
+                            enabled = actionsEnabled && !replayBlocked,
+                            onClick = { menuOpen = false; delete() }
+                        )
+                    }
+                    if (!actionsEnabled) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.message_actions_busy)) },
+                            enabled = false,
+                            onClick = {}
+                        )
+                    }
+                    if (replayBlocked && (onEdit != null || onRegenerate != null)) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.agent_protected_history)) },
+                            enabled = false,
+                            onClick = {}
+                        )
                     }
                 }
             }

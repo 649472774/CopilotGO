@@ -20,7 +20,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -143,16 +142,15 @@ fun ModelPickerInline(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     item {
-                        OutlinedTextField(
+                        SearchInput(
                             value = query,
                             onValueChange = {
                                 queryTooLong = it.length > 256
                                 if (!queryTooLong) query = it
                             },
-                            singleLine = true,
                             isError = queryTooLong,
-                            supportingText = if (queryTooLong) ({ Text(stringResource(R.string.search_limit)) }) else null,
-                            label = { Text(stringResource(R.string.model_search)) },
+                            supportingText = if (queryTooLong) stringResource(R.string.search_limit) else null,
+                            label = stringResource(R.string.model_search),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

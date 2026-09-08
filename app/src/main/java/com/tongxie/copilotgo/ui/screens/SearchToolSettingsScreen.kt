@@ -12,7 +12,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,6 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tongxie.copilotgo.R
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import com.tongxie.copilotgo.data.tools.CredentialUpdate
 import com.tongxie.copilotgo.data.tools.SearchProvider
 import com.tongxie.copilotgo.data.tools.ToolSettingsLimits
@@ -110,7 +110,7 @@ fun SearchToolSettingsScreen(
             )
             form != null -> LazyColumn(
                 modifier = pageModifier.imePadding().testTag("tool-search-settings"),
-                contentPadding = PaddingValues(20.dp),
+                contentPadding = PaddingValues(AppLayout.PageGutter),
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 item {
@@ -244,7 +244,7 @@ fun SearchToolSettingsScreen(
                     }
                 }
                 item {
-                    OutlinedButton(
+                    TextButton(
                         onClick = {
                             focus.clearFocus()
                             if (dirty) {
