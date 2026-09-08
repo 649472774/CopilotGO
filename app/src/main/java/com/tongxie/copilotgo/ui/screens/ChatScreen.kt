@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
@@ -50,9 +52,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -77,7 +79,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -110,7 +111,6 @@ import com.tongxie.copilotgo.ui.agent.AgentModeDialog
 import com.tongxie.copilotgo.ui.agent.AgentRunDetailsDialog
 import com.tongxie.copilotgo.ui.agent.AgentToolbarActivity
 import com.tongxie.copilotgo.ui.agent.agentModelDisabledReason
-import com.tongxie.copilotgo.ui.agent.agentRunLabel
 import com.tongxie.copilotgo.ui.agent.agentToolDisclosure
 import com.tongxie.copilotgo.ui.agent.hasConsentedPublicWebTools
 import com.tongxie.copilotgo.ui.agent.agentCitationLinks
@@ -121,6 +121,7 @@ import com.tongxie.copilotgo.ui.draft.DraftLimits
 import com.tongxie.copilotgo.ui.files.exportShareIntent
 import com.tongxie.copilotgo.ui.state.NetworkAvailability
 import com.tongxie.copilotgo.ui.state.observeNetworkAvailability
+import com.tongxie.copilotgo.ui.theme.AppLayout
 import com.tongxie.copilotgo.ui.viewmodel.ChatDraftsViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ChatViewModel
 import com.tongxie.copilotgo.ui.viewmodel.DraftProblem
@@ -627,28 +628,45 @@ fun ChatContent(
             contentWindowInsets = systemInsets,
             topBar = {
                 if (!minimalChrome) {
-                TopAppBar(
-                    title = {
-                        Text(session.title.ifBlank { stringResource(R.string.chat_title) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                    Surface(color = MaterialTheme.colorScheme.surface) {
+                        Box(
+                            Modifier.fillMaxWidth()
+                                .windowInsetsPadding(systemInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                Modifier.widthIn(max = AppLayout.ReadingWidth).fillMaxWidth()
+                                    .heightIn(min = 64.dp).padding(horizontal = 8.dp).testTag(ChatTags.HEADER),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(onClick = onBack, modifier = Modifier.size(AppLayout.ControlSize)) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                                }
+                                ModelPickerInline(
+                                    currentModel = session.model,
+                                    models = catalog.models,
+                                    onSelect = onModelSelect,
+                                    modifier = Modifier.weight(1f),
+                                    enabled = !sending && !draft.submitting && !changingModel,
+                                    loading = catalog.loading || changingModel,
+                                    error = catalog.error,
+                                    isStale = catalog.isStale,
+                                    onRefresh = onRefreshModels,
+                                    compact = true,
+                                    headingText = session.title.ifBlank { stringResource(R.string.chat_title) }
+                                )
+                                if (activeRun != null) {
+                                    AgentToolbarActivity(activeRun) { reviewRun(activeRun) }
+                                } else if (onOpenAgentMode != null) {
+                                    AgentModeButton(
+                                        enabled = session.agentSettings.enabled,
+                                        onClick = { focus.clearFocus(); keyboard?.hide(); onOpenAgentMode() },
+                                        interactive = !sending && !draft.submitting && !changingModel && !agentChanging
+                                    )
+                                }
+                            }
                         }
-                    },
-                    actions = {
-                        if (activeRun != null) {
-                            AgentToolbarActivity(activeRun) { reviewRun(activeRun) }
-                        } else if (onOpenAgentMode != null) {
-                            AgentModeButton(
-                                enabled = session.agentSettings.enabled,
-                                onClick = { focus.clearFocus(); keyboard?.hide(); onOpenAgentMode() },
-                                interactive = !sending && !draft.submitting && !changingModel && !agentChanging
-                            )
-                        }
-                    },
-                    windowInsets = systemInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
-                )
+                    }
                 }
             },
             snackbarHost = { SnackbarHost(snackbar) },
@@ -659,7 +677,7 @@ fun ChatContent(
                     contentAlignment = Alignment.TopCenter
                 ) {
                         ChatComposer(
-                            modifier = Modifier.widthIn(max = 960.dp).fillMaxWidth().heightIn(max = composerMaxHeight),
+                            modifier = Modifier.widthIn(max = AppLayout.ReadingWidth).fillMaxWidth().heightIn(max = composerMaxHeight),
                             text = draft.draft.text,
                             attachments = attachmentItems,
                             onTextChange = onTextChange,
@@ -683,8 +701,6 @@ fun ChatContent(
                                 model == null -> stringResource(R.string.chat_select_model)
                                 agentDisabledReason != null -> stringResource(agentDisabledReason)
                                 images && !model.supportsVision -> stringResource(R.string.chat_model_no_vision)
-                                sending && activeRun != null -> stringResource(agentRunLabel(activeRun))
-                                sending -> stringResource(R.string.chat_draft_while_sending)
                                 else -> null
                             },
                             notice = {
@@ -705,25 +721,12 @@ fun ChatContent(
                 Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                 contentAlignment = Alignment.TopCenter
             ) {
-                Column(Modifier.widthIn(max = 960.dp).fillMaxSize()) {
+                Column(Modifier.widthIn(max = AppLayout.ReadingWidth).fillMaxSize()) {
                     if (networkUnavailable && !minimalChrome) {
                         FeedbackBanner(
                             stringResource(R.string.network_offline),
                             actionLabel = if (onNetworkSettings != null) stringResource(R.string.network_settings) else null,
                             onAction = onNetworkSettings
-                        )
-                    }
-                    if (!compactHeight || imeHeight == 0.dp) {
-                        ModelPickerInline(
-                            currentModel = session.model,
-                            models = catalog.models,
-                            onSelect = onModelSelect,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                            enabled = !sending && !draft.submitting && !changingModel,
-                            loading = catalog.loading || changingModel,
-                            error = catalog.error,
-                            isStale = catalog.isStale,
-                            onRefresh = onRefreshModels
                         )
                     }
                     if (error != null) {
