@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -22,10 +23,13 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDialog
@@ -37,24 +41,31 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.tongxie.copilotgo.R
 import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
 import com.tongxie.copilotgo.data.agent.AgentApprovalResponse
 import com.tongxie.copilotgo.data.agent.AgentRunStatus
 import com.tongxie.copilotgo.data.agent.AgentToolCallStatus
+import com.tongxie.copilotgo.data.agent.AgentToolKind
+import com.tongxie.copilotgo.data.agent.SourceKind
 import com.tongxie.copilotgo.ui.agent.AgentTags
+import com.tongxie.copilotgo.ui.agent.AutomaticSearchTags
 import com.tongxie.copilotgo.ui.components.ChatTags
 import com.tongxie.copilotgo.ui.screens.ChatScreen
 import com.tongxie.copilotgo.ui.theme.CopilotGoTheme
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
@@ -127,6 +138,107 @@ class AgentControllerAcceptanceTest {
         saveScreenshot("agent-controller-approved-200")
     }
 
+    @Test fun defaultAutomaticWeatherConsentCancelThenConfirmSavesOnceAndShowsReturnedSources() {
+        val fixture = fixture(enabled = false, automaticSearch = true)
+        val settings = requireNotNull(fixture.toolSettings)
+        val automaticTools = requireNotNull(fixture.automaticTools)
+        show(fixture)
+        val originalSettings = fixture.center.sessionFlow(fixture.id).value!!.agentSettings
+        val originalWeb = settings.state.value.snapshot!!.web
+        val writesBefore = fixture.settingsVault.writeAttempts.get()
+        assertFalse(originalSettings.enabled)
+        assertTrue(originalSettings.automaticWebSearch)
+        assertFalse(originalWeb.automaticSearchConsent)
+        assertTrue("Exercise a real nondefault configuration revision", originalWeb.revision > 1)
+        rule.onNodeWithTag(AgentTags.MODE).assertTextContains(rule.activity.getString(R.string.agent_mode_automatic))
+        val prompt = "今天北京的天气怎么样？"
+        rule.onNodeWithTag(ChatTags.INPUT).performClick().performTextReplacement(prompt)
+        Espresso.closeSoftKeyboard()
+        val originalDraft = rule.runOnIdle { fixture.drafts.state(fixture.id).value.draft }
+        val acceptedBefore = fixture.drafts.state(fixture.id).value.acceptedSerial
+        rule.onNodeWithTag(ChatTags.SEND).assertIsEnabled().performClick()
+        rule.onNodeWithTag(AutomaticSearchTags.DIALOG).assertIsDisplayed()
+        rule.onNodeWithTag(AutomaticSearchTags.CANCEL).performScrollTo().performClick()
+        rule.waitUntil { rule.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty() }
+        rule.waitUntil(10_000) { !fixture.drafts.state(fixture.id).value.saving }
+        assertEquals(originalDraft, fixture.drafts.state(fixture.id).value.draft)
+        assertEquals(originalDraft, runBlocking(Dispatchers.IO) { fixture.persistedDraft() })
+        assertEquals(originalWeb, settings.state.value.snapshot!!.web)
+        assertEquals(writesBefore, fixture.settingsVault.writeAttempts.get())
+        assertFalse(fixture.center.sendingFlow(fixture.id).value)
+        assertTrue(fixture.center.sessionFlow(fixture.id).value!!.messages.isEmpty())
+        assertTrue(fixture.modelRequests.isEmpty())
+        assertTrue(automaticTools.invocations.isEmpty())
+        assertTrue(fixture.tools.invocations.isEmpty())
+
+        rule.onNodeWithTag(ChatTags.SEND).assertIsEnabled().performClick()
+        rule.onNodeWithTag(AutomaticSearchTags.DIALOG).assertIsDisplayed()
+        val gate = CompletableDeferred<Unit>()
+        fixture.settingsVault.writeGate.set(gate)
+        val confirm = rule.onNodeWithTag(AutomaticSearchTags.CONFIRM).performScrollTo()
+            .assertIsEnabled().assertHeightIsAtLeast(48.dp)
+            .fetchSemanticsNode().config[SemanticsActions.OnClick].action!!
+        rule.runOnIdle { confirm(); confirm() }
+        rule.waitUntil(10_000) { fixture.settingsVault.writeAttempts.get() == writesBefore + 1 }
+        rule.onNodeWithTag(AutomaticSearchTags.CONFIRM).assertIsNotEnabled()
+        assertEquals(originalWeb, fixture.settingsVault.persistedWeb())
+        assertEquals(originalDraft, fixture.drafts.state(fixture.id).value.draft)
+        assertTrue(fixture.center.sessionFlow(fixture.id).value!!.messages.isEmpty())
+        assertTrue(fixture.modelRequests.isEmpty())
+        assertTrue(automaticTools.invocations.isEmpty())
+        rule.runOnIdle {
+            fixture.settingsVault.writeGate.set(null)
+            gate.complete(Unit)
+        }
+        rule.waitUntil(10_000) {
+            val run = fixture.center.sessionFlow(fixture.id).value?.messages?.lastOrNull()?.agentRun
+            run?.status?.isTerminal == true && !fixture.center.sendingFlow(fixture.id).value &&
+                !fixture.drafts.state(fixture.id).value.submitting
+        }
+        val savedWeb = settings.state.value.snapshot!!.web
+        assertEquals(originalWeb.revision + 1, savedWeb.revision)
+        assertEquals(writesBefore + 1, fixture.settingsVault.writeAttempts.get())
+        assertEquals(savedWeb, fixture.settingsVault.persistedWeb())
+        assertTrue(savedWeb.searchEnabled && savedWeb.externalSharingConsent && savedWeb.automaticSearchConsent)
+        assertEquals(originalWeb.pageReaderEnabled, savedWeb.pageReaderEnabled)
+        assertEquals(originalWeb.provider, savedWeb.provider)
+        assertEquals(originalWeb.credentialState, savedWeb.credentialState)
+
+        val session = fixture.center.sessionFlow(fixture.id).value!!
+        val user = session.messages.single { it.role == "user" }
+        val assistant = session.messages.single { it.role == "assistant" }
+        val run = requireNotNull(assistant.agentRun)
+        assertEquals(fixture.center.errorFlow(fixture.id).value, AgentRunStatus.COMPLETED, run.status)
+        assertEquals(originalSettings, session.agentSettings)
+        assertEquals(prompt, user.content)
+        assertEquals(originalDraft.submissionId, user.submissionId)
+        assertEquals(acceptedBefore + 1, fixture.drafts.state(fixture.id).value.acceptedSerial)
+        assertTrue(fixture.drafts.state(fixture.id).value.draft.isEmpty)
+        assertEquals(2, fixture.modelRequests.size)
+        assertTrue(fixture.modelRequests.all { request ->
+            request.tools.none { it.function.name == "fixture_read" }
+        })
+        assertTrue(fixture.tools.invocations.isEmpty())
+        val invocation = automaticTools.invocations.single()
+        assertEquals(savedWeb.revision, invocation.tool.identity.configRevision)
+        assertEquals(AgentToolKind.PUBLIC_WEB_SEARCH, invocation.tool.kind)
+        assertEquals(AgentToolCallStatus.SUCCEEDED, run.steps.first().toolCalls.single().status)
+        val source = run.sources.single()
+        assertEquals(ControllerAutomaticWebTool.SOURCE_URL, source.url)
+        assertEquals(ControllerAutomaticWebTool.SOURCE_TITLE, source.title)
+        assertEquals(SourceKind.SEARCH_HIT, source.kind)
+        assertEquals("S1", source.id)
+        assertEquals(invocation.callId, source.toolCallId)
+        val persisted = runBlocking(Dispatchers.IO) { fixture.persistedSession() }
+        assertEquals(originalDraft.submissionId, persisted.messages.single { it.role == "user" }.submissionId)
+        assertEquals(run.sources, persisted.messages.last().agentRun!!.sources)
+        rule.onNodeWithTag(ChatTags.MESSAGES).performScrollToKey(assistant.id)
+        rule.onNodeWithTag("agent-source-${source.id}").performScrollTo()
+            .assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithText(source.title, substring = true).assertIsDisplayed()
+        assertEquals(0, fixture.unexpectedRequests.get())
+    }
+
     @Test fun realImeBackAndViewModelRecreationDoNotOwnOrDiscardAnActiveRun() {
         val fixture = fixture(enabled = true)
         val visible = mutableStateOf(true)
@@ -185,11 +297,11 @@ class AgentControllerAcceptanceTest {
         assertEquals(AgentRunStatus.INTERRUPTED, persisted.messages.last().agentRun?.status)
     }
 
-    private fun fixture(enabled: Boolean): AgentControllerFixture {
+    private fun fixture(enabled: Boolean, automaticSearch: Boolean = false): AgentControllerFixture {
         val root = File(rule.activity.cacheDir, "agent-controller-fixture-${UUID.randomUUID()}")
         val fixture = runBlocking(Dispatchers.IO) {
             check(root.mkdirs())
-            AgentControllerFixture(rule.activity, root).also { it.initialize(enabled) }
+            AgentControllerFixture(rule.activity, root, automaticSearch).also { it.initialize(enabled) }
         }
         fixtures += fixture
         rule.runOnIdle { fixture.createUiOwners() }
@@ -202,10 +314,11 @@ class AgentControllerAcceptanceTest {
                 if (visible.value) {
                     BackHandler { visible.value = false }
                     val chat = remember { fixture.newChatView() }
+                    val toolSettings by fixture.publicSettings.collectAsStateWithLifecycle()
                     DisposableEffect(chat) { onDispose { fixture.chatOwner.clear() } }
                     ChatScreen(
                         fixture.id, chat, fixture.models, fixture.drafts, fixture.files,
-                        toolSettings = fixture.publicSettings, onOpenTools = {},
+                        toolSettings = toolSettings, onOpenTools = {},
                         onBack = { visible.value = false }
                     )
                 } else {

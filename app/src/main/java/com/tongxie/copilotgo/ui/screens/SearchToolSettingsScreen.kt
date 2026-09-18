@@ -115,7 +115,7 @@ fun SearchToolSettingsScreen(
             ) {
                 item {
                     Text(
-                        stringResource(R.string.tool_settings_overview_detail),
+                        stringResource(R.string.automatic_search_settings_overview),
                         style = MaterialTheme.typography.bodyLarge
                     )
                 }
@@ -125,7 +125,7 @@ fun SearchToolSettingsScreen(
                 item {
                     SettingsToggleRow(
                         title = stringResource(R.string.tool_settings_enabled_search),
-                        detail = stringResource(R.string.tool_settings_enabled_search_detail),
+                        detail = stringResource(R.string.automatic_search_settings_enabled_detail),
                         checked = form.draft.searchEnabled,
                         enabled = inputsEnabled,
                         onCheckedChange = { value -> viewModel.editSearch { it.copy(searchEnabled = value) } },
@@ -189,13 +189,32 @@ fun SearchToolSettingsScreen(
                             checked = form.draft.externalSharingConsent,
                             enabled = inputsEnabled,
                             onCheckedChange = { value ->
-                                viewModel.editSearch { it.copy(externalSharingConsent = value) }
+                                viewModel.editSearch {
+                                    it.copy(
+                                        externalSharingConsent = value,
+                                        automaticSearchConsent = value && it.automaticSearchConsent
+                                    )
+                                }
                             },
                             modifier = Modifier.testTag("tool-sharing-consent")
                         )
                         if (!form.draft.externalSharingConsent) {
                             FeedbackBanner(stringResource(R.string.tool_settings_sharing_blocked))
                         }
+                        SettingsToggleRow(
+                            title = stringResource(R.string.automatic_search_settings_consent),
+                            detail = stringResource(R.string.automatic_search_settings_consent_detail),
+                            checked = form.draft.automaticSearchConsent,
+                            enabled = inputsEnabled && form.draft.externalSharingConsent,
+                            onCheckedChange = { value ->
+                                viewModel.editSearch { it.copy(automaticSearchConsent = value) }
+                            },
+                            modifier = Modifier.testTag("tool-automatic-search-consent")
+                        )
+                        Text(
+                            stringResource(R.string.automatic_search_settings_consent_dependency),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
                 }
                 item { HorizontalDivider() }

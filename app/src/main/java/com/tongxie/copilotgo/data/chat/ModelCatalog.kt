@@ -74,7 +74,7 @@ class ModelCatalog(
                 if (owner != key) {
                     owner = key
                     _state.value = ModelCatalogState(loading = true)
-                    loadCache(key)
+                    loadCache(key, generation)
                 }
                 val models = client.listModels()
                 if (generation != auth.accountGeneration.value) throw CancellationException("Account changed")
@@ -106,16 +106,18 @@ class ModelCatalog(
         }
     }
 
-    private fun loadCache(key: String) {
+    private fun loadCache(key: String, generation: Long) {
         val file = cacheFile ?: return
         if (!file.exists()) return
         try {
             val cached = json.decodeFromString(
                 CachedCatalog.serializer(), AtomicFiles.read(file, 1024 * 1024).toString(Charsets.UTF_8)
             )
-            if (cached.owner == key && clock() - cached.updatedAt in 0..MAX_CACHE_AGE_MS) {
+            if (generation == auth.accountGeneration.value && cached.owner == key &&
+                clock() - cached.updatedAt in 0..MAX_CACHE_AGE_MS
+            ) {
                 _state.value = ModelCatalogState(
-                    cached.models.filter { it.chatCompatible }, loading = true,
+                    cached.models.filter { it.pickerVisible }.distinctBy { it.id }, loading = true,
                     isStale = true, updatedAt = cached.updatedAt
                 )
             }
@@ -127,17 +129,18 @@ class ModelCatalog(
     }
 
     suspend fun requireModel(selectedId: String, needsVision: Boolean, needsTools: Boolean = false): ModelInfo {
+        val generation = auth.accountGeneration.value
         refresh()
+        if (generation != auth.accountGeneration.value) throw CancellationException("Account changed")
         val current = state.value
         if (current.isStale || current.updatedAt == null) {
             throw ModelUnavailableException(current.error ?: "请先刷新可用模型列表")
         }
         val model = if (selectedId.isBlank()) {
             current.models.firstOrNull {
-                it.isChatDefault && it.chatCompatible &&
-                    (!needsVision || it.supportsVision) && (!needsTools || it.supportsTools)
+                it.isChatDefault && it.unavailableReason(needsVision, needsTools) == null
             } ?: current.models.firstOrNull {
-                it.chatCompatible && (!needsVision || it.supportsVision) && (!needsTools || it.supportsTools)
+                it.unavailableReason(needsVision, needsTools) == null
             }
         } else {
             current.models.firstOrNull { it.id == selectedId }
@@ -145,12 +148,7 @@ class ModelCatalog(
             if (selectedId.isBlank()) "当前账号没有可用的聊天模型，请刷新或检查订阅"
             else "已选模型当前不可用，请刷新列表并手动选择模型"
         )
-        if (needsVision && !model.supportsVision) {
-            throw ModelUnavailableException("此会话包含图片，请选择支持视觉的模型后继续")
-        }
-        if (!model.chatCompatible || (needsTools && !model.supportsTools)) {
-            throw ModelUnavailableException("已选模型不支持 Agent 工具调用，请手动选择支持工具的聊天模型")
-        }
+        model.unavailableReason(needsVision, needsTools)?.let { throw ModelUnavailableException(it) }
         return model
     }
 

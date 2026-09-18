@@ -37,6 +37,147 @@ class AgentEngineTest {
     )
 
     @Test
+    fun responsesReasoningSurvivesOnlyTheCurrentRunAndIsNotPublishedOrPersisted() = runBlocking {
+        val output = listOf(
+            Json.parseToJsonElement(
+                """{"type":"reasoning","id":"rs_fixture","encrypted_content":"fixture-opaque-state","summary":[]}"""
+            ) as JsonObject,
+            Json.parseToJsonElement(
+                """{"type":"function_call","id":"fc_fixture","call_id":"call-1","name":"fixture_search","arguments":"{\"query\":\"fixture\"}","status":"completed"}"""
+            ) as JsonObject
+        )
+        val model = AgentTestModel().apply {
+            enqueue(proposal().copy(responsesOutput = output))
+            answer()
+        }
+        val callbacks = AgentTestCallbacks()
+        val run = engine(model, AgentTestExecutor()).run(
+            agentInput().copy(model = agentTestModel.copy(supportedEndpoints = listOf("/responses"))),
+            callbacks
+        )
+        assertEquals(AgentRunStatus.COMPLETED, run.status)
+        assertEquals(output, model.requests.last().messages.single { it.toolCalls != null }.responsesOutput)
+        assertFalse(Json.encodeToString(AgentRunRecord.serializer(), run).contains("fixture-opaque-state"))
+        assertTrue(callbacks.updates.none { it.content.contains("fixture-opaque-state") })
+        assertFalse(Json.encodeToString(AgentChatRequest.serializer(), model.requests.last()).contains("fixture-opaque-state"))
+    }
+
+    @Test
+    fun responsesContinuationUsesApprovedOriginalArgumentsWhileActivityStaysRedacted() = runBlocking {
+        val original = """{"query":"sensitive-fixture-value"}"""
+        val output = listOf(
+            Json.parseToJsonElement(
+                """{"type":"reasoning","id":"rs_sensitive","encrypted_content":"opaque-fixture","summary":[]}"""
+            ) as JsonObject,
+            Json.parseToJsonElement(
+                """{"type":"function_call","id":"fc_sensitive","call_id":"call-1","name":"fixture_search","arguments":"{\"query\":\"sensitive-fixture-value\"}","status":"completed"}"""
+            ) as JsonObject
+        )
+        val model = AgentTestModel().apply {
+            enqueue(proposal(arguments = original).copy(responsesOutput = output))
+            answer()
+        }
+        val tools = AgentTestExecutor().apply {
+            validateAction = {
+                AgentToolValidation(Json.parseToJsonElement("""{"query":"[redacted]"}""") as JsonObject)
+            }
+        }
+        val callbacks = AgentTestCallbacks()
+        val run = engine(model, tools).run(
+            agentInput().copy(model = agentTestModel.copy(supportedEndpoints = listOf("/responses"))),
+            callbacks
+        )
+        assertEquals(AgentRunStatus.COMPLETED, run.status)
+        assertEquals(original, model.requests.last().messages.single { it.toolCalls != null }.toolCalls!!.single().function.arguments)
+        assertEquals("[redacted]", (run.steps.first().toolCalls.single().arguments!!["query"] as JsonPrimitive).content)
+        assertFalse(Json.encodeToString(AgentRunRecord.serializer(), run).contains("sensitive-fixture-value"))
+        assertTrue(callbacks.updates.none { Json.encodeToString(AgentRunRecord.serializer(), it.run).contains("sensitive-fixture-value") })
+    }
+
+    @Test
+    fun automaticWeatherSearchMustRunBeforeTheGroundedContinuation() = runBlocking {
+        val model = AgentTestModel().apply {
+            enqueue(proposal(arguments = """{"query":"Beijing weather today"}"""))
+            answer("The weather report was retrieved [S1].")
+        }
+        val tools = AgentTestExecutor(AgentToolKind.PUBLIC_WEB_SEARCH)
+        val callbacks = AgentTestCallbacks()
+        val input = agentInput(autoApprove = true).copy(
+            history = listOf(UiMessage("u", "user", "今天北京天气如何")),
+            requireWebSearch = true, publicWebOnly = true, expectedWebRevision = 0
+        )
+        val run = engine(model, tools).run(input, callbacks)
+        assertEquals(AgentRunStatus.COMPLETED, run.status)
+        assertEquals("required", model.requests.first().toolChoice)
+        assertEquals("auto", model.requests.last().toolChoice)
+        assertEquals(1, tools.invocations.size)
+        assertTrue(callbacks.approvals.isEmpty())
+        assertEquals("S1", run.sources.single().id)
+        assertTrue(model.requests.last().messages.single { it.role == "tool" }.content.toString().contains("Actual fixture output"))
+    }
+
+    @Test
+    fun automaticModeNeverOffersOrExecutesConfiguredMcpTools() = runBlocking {
+        val model = AgentTestModel().apply { enqueue(proposal(name = "dangerous_mcp")) }
+        val tools = AgentTestExecutor(AgentToolKind.PUBLIC_WEB_SEARCH)
+        val mcp = tools.descriptor.copy(name = "dangerous_mcp", kind = AgentToolKind.MCP)
+        tools.snapshotAction = { AgentToolSnapshot(0, listOf(tools.descriptor, mcp)) }
+        val run = engine(model, tools).run(
+            agentInput(autoApprove = true).copy(
+                requireWebSearch = true, publicWebOnly = true, expectedWebRevision = 0
+            ),
+            AgentTestCallbacks()
+        )
+        assertEquals(listOf("fixture_search"), model.requests.single().tools.map { it.function.name })
+        assertEquals(AgentRunStatus.FAILED, run.status)
+        assertTrue(tools.invocations.isEmpty())
+    }
+
+    @Test
+    fun aModelRefusingToSearchCannotCompleteACurrentInformationRun() = runBlocking {
+        val model = AgentTestModel().apply { answer("I am a local model and cannot browse.") }
+        val tools = AgentTestExecutor(AgentToolKind.PUBLIC_WEB_SEARCH)
+        val run = engine(model, tools).run(
+            agentInput(autoApprove = true).copy(requireWebSearch = true),
+            AgentTestCallbacks()
+        )
+        assertEquals(AgentRunStatus.FAILED, run.status)
+        assertTrue(run.notice!!.contains("没有完成"))
+        assertTrue(tools.invocations.isEmpty())
+    }
+
+    @Test
+    fun failedSearchStopsRatherThanAskingTheModelToInventAQuote() = runBlocking {
+        val model = AgentTestModel().apply { enqueue(proposal()); answer("Invented quote") }
+        val tools = AgentTestExecutor(AgentToolKind.PUBLIC_WEB_SEARCH).apply {
+            executeAction = { AgentToolResult("Search provider rate limited", isError = true) }
+        }
+        val run = engine(model, tools).run(
+            agentInput(autoApprove = true).copy(requireWebSearch = true),
+            AgentTestCallbacks()
+        )
+        assertEquals(AgentRunStatus.FAILED, run.status)
+        assertEquals(1, model.requests.size)
+        assertTrue(run.notice!!.contains("rate limited"))
+        assertTrue(run.sources.isEmpty())
+    }
+
+    @Test
+    fun automaticConsentCannotSurviveAChangedWebConfigurationBeforePreparation() = runBlocking {
+        val model = AgentTestModel()
+        val tools = AgentTestExecutor(AgentToolKind.PUBLIC_WEB_SEARCH)
+        val run = engine(model, tools).run(
+            agentInput(autoApprove = true).copy(
+                requireWebSearch = true, publicWebOnly = true, expectedWebRevision = 42
+            ),
+            AgentTestCallbacks()
+        )
+        assertEquals(AgentRunStatus.INTERRUPTED, run.status)
+        assertTrue(model.requests.isEmpty())
+        assertTrue(tools.invocations.isEmpty())
+    }
+
+    @Test
     fun preparedFirstRequestReusesItsImageHistoryAndDetachedDefinitions() = runBlocking {
         val model = AgentTestModel().apply { answer("The prepared image was retained.") }
         val tools = AgentTestExecutor()

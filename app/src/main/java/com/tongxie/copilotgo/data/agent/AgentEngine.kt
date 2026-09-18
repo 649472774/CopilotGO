@@ -57,17 +57,27 @@ class AgentEngine(
             currentCoroutineContext().ensureActive()
             val supplied = executor.snapshot()
             val snapshot = supplied.copy(
-                tools = supplied.tools.map { it.copy(inputSchema = AgentValues.detached(it.inputSchema)) },
+                tools = supplied.tools.filter { !input.publicWebOnly || it.kind != AgentToolKind.MCP }
+                    .map { it.copy(inputSchema = AgentValues.detached(it.inputSchema)) },
                 issues = supplied.issues.toList()
             )
             validateCatalog(snapshot, input.settings.limits)
+            if (input.publicWebOnly && (input.expectedWebRevision == null ||
+                snapshot.tools.any { it.identity.configRevision != input.expectedWebRevision })
+            ) throw AgentToolConfigurationChangedException()
             if (snapshot.tools.isEmpty()) {
                 throw AgentToolException("没有可用工具，请在 Agent 设置中启用搜索或配置远程 MCP")
             }
+            val firstTools = if (input.requireWebSearch) {
+                snapshot.tools.filter { it.kind == AgentToolKind.PUBLIC_WEB_SEARCH }.also {
+                    if (it.isEmpty()) throw AgentToolException("本次问题需要联网搜索，请先启用并授权搜索工具；不会用模型记忆冒充实时结果")
+                }
+            } else snapshot.tools
             val prompt = promptBuilder.prepare(
-                input.history, input.model, snapshot.tools.map { it.modelDefinition() }, limits = input.settings.limits
+                input.history, input.model, firstTools.map { it.modelDefinition() },
+                limits = input.settings.limits, requireWebSearch = input.requireWebSearch
             )
-            AgentRequestEncoder.encode(prompt.request, json)
+            AgentRequestEncoder.encode(prompt.request, json, input.model, input.settings.limits.maxContextBytes)
             currentCoroutineContext().ensureActive()
             PreparedRun(input, snapshot, prompt, started).also { it.ensureCurrent() }
         } ?: throw AgentContextLimitException("准备 Agent 请求超时，草稿已保留")
@@ -115,6 +125,7 @@ class AgentEngine(
         private var record = AgentRunRecord(input.runId, input.accountGeneration, startedAt = input.startedAt)
         @Volatile private var configurationChanged = false
         private val seenCalls = mutableSetOf<String>()
+        private val responsesOutput = mutableMapOf<Int, List<JsonObject>>()
         private var totalResultBytes = 0
         private val historicalSources = input.history.flatMap { message ->
             message.agentRun?.steps.orEmpty().flatMap { step ->
@@ -201,8 +212,10 @@ class AgentEngine(
                         break
                     }
                     val prompt = if (record.steps.isEmpty()) preparation.firstPrompt else promptBuilder.prepare(
-                        input.history, input.model, snapshot.tools.map { it.modelDefinition() }, record.steps, limits
+                        input.history, input.model, snapshot.tools.map { it.modelDefinition() }, record.steps, limits,
+                        responsesOutput = responsesOutput
                     )
+                    AgentRequestEncoder.encode(prompt.request, json, input.model, limits.maxContextBytes)
                     if (prompt.truncated) {
                         record = record.copy(notice = "较早的完整轮次已从请求中省略；原会话及工具记录仍完整保留")
                     }
@@ -238,8 +251,14 @@ class AgentEngine(
                         }
                     }
                     val completion = terminal ?: throw StreamProtocolException("模型回复在完成前中断")
+                    if (completion.responsesOutput.isNotEmpty()) {
+                        responsesOutput[stepIndex] = completion.responsesOutput.map { AgentValues.detached(it) }
+                    }
                     updateStep { it.copy(finishReason = completion.finishReason) }
                     if (completion.toolCalls.isEmpty()) {
+                        if (input.requireWebSearch && !hasSuccessfulSearch()) {
+                            throw AgentToolException("模型没有完成要求的联网搜索，未取得实时来源；请重试或更换支持工具的模型")
+                        }
                         if (completion.finishReason !in setOf("stop", "length")) {
                             throw StreamProtocolException("模型返回了不受支持的结束状态")
                         }
@@ -268,6 +287,13 @@ class AgentEngine(
                     if (completion.finishReason != "tool_calls") {
                         throw StreamProtocolException("工具调用缺少完整的结束标记")
                     }
+                    if (input.requireWebSearch && record.steps.size == 1 &&
+                        completion.toolCalls.any { call ->
+                            snapshot.tools.none {
+                                it.name == call.function.name && it.kind == AgentToolKind.PUBLIC_WEB_SEARCH
+                            }
+                        }
+                    ) throw AgentToolException("本轮仅授权先进行联网搜索，模型提出的其他工具未执行")
                     if (seenCalls.size + completion.toolCalls.size > limits.maxToolCalls) {
                         limit("已达到 Agent 工具调用次数限制，新提议未执行")
                         break
@@ -284,6 +310,11 @@ class AgentEngine(
                         execute(proposal)
                         if (record.status.isTerminal) break
                     }
+                    if (!record.status.isTerminal && input.requireWebSearch && !hasSuccessfulSearch()) {
+                        val problem = record.steps.last().toolCalls.lastOrNull()?.result?.content
+                            ?.let { AgentValues.truncateUtf8(it, 512) }.orEmpty()
+                        throw AgentToolException("联网搜索未取得可引用的结果，不会使用模型记忆冒充实时数据。$problem")
+                    }
                 }
             } finally {
                 watcher.cancelAndJoin()
@@ -297,6 +328,7 @@ class AgentEngine(
             if (calls.map { it.id }.distinct().size != calls.size || calls.any { it.id in seenCalls }) {
                 throw StreamProtocolException("模型返回重复的工具调用标识，未执行重复操作")
             }
+
             calls.forEach { call ->
                 if (!CALL_ID.matches(call.id) || call.type != "function" || !NAME.matches(call.function.name) ||
                     AgentValues.utf8Size(call.function.arguments) > limits.maxArgumentBytes
@@ -334,6 +366,13 @@ class AgentEngine(
                         AgentValues.detached(validated.displayArguments), digest, createdAt = clock()
                     )
                 )
+            }
+        }
+
+        private fun hasSuccessfulSearch(): Boolean = record.steps.any { step ->
+            step.toolCalls.any { call ->
+                call.kind == AgentToolKind.PUBLIC_WEB_SEARCH && call.status == AgentToolCallStatus.SUCCEEDED &&
+                    call.result?.isError == false && call.result.sources.any { it.kind == SourceKind.SEARCH_HIT }
             }
         }
 

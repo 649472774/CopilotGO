@@ -31,6 +31,12 @@ GitHub Release 和用户最终交付目录由集成负责人统一操作。脚�
 继续升级，不重新导入或重置历史种子；构建时显式使用 `-RollbackTag v0.3.0`。
 原始标签、签名记录和各版本 APK 都保留。
 
+模型与自动联网里程碑 `v0.5.0` / code 38 使用 `v0.4.0` / code 37 作为兼容升级基线，
+构建时传入 `-RollbackTag v0.4.0`。该基线源码为
+`34935e87e404e5d6c135edd28f66e0cd5f038bc7`，APK SHA-256 为
+`cfdb1133170b1db10b5cc9d2f9cf6a82f94c8fbb725eb5cdc9a34eb8c266b685`；
+证书仍为上述固定身份。不要用同 versionCode 的开发包覆盖基线后再声称完成版本升级。
+
 ## 1. 先准备并提交版本
 
 在当前工作树使用 PowerShell 7。脚本默认**不升版、不装机、不复制、不提交、不推送**。
@@ -156,6 +162,16 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
   factory 与真实 Keystore；核对迁移、往返读取和损坏密文时不回退为伪成功。
 
 这些类需要由集成设备 lane 实际执行；编译通过不能代替执行结果。
+
+模型/联网里程碑还应在隔离的 API 31 与 API 36 fixture 上覆盖首次自动联网授权、
+取消保留草稿、只发送授权时的原草稿、撤销授权、普通问题无工具和 MCP 审批边界。
+`CompatibleUpdateAcceptanceTest#accepts_explicit_code38_candidate_while_code37_remains_installed`
+先在 code 37 上用真实更新验证器检查显式暂存的 code 38 候选，之后才覆盖安装。
+`ModelWebUpgradeAcceptanceTest` 只读取明确提供摘要的合成旧会话和附件，核对升级后
+字节、正文、附件以及“自动判断不等于自动授权”的默认值；它不会重新写入种子。
+新建测试 AVD 必须经过用户授权，不能拿用户现有模拟器或手机替代隔离设备。
+真实 Exa 冒烟使用无账户、无凭据的临时设置及公开天气/股票/文档查询；
+这不是对真实 Copilot 账户所有模型权限、实时行情精度或任意代理路线的保证。
 
 `scripts/run-native-acceptance.ps1` 复用现有 AndroidJUnitRunner，供独占设备 lane
 记录每次实际运行。它不启动模拟器、不安装 APK、不写入种子、不清数据，也不修改

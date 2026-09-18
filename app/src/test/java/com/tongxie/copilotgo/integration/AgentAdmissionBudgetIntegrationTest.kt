@@ -15,7 +15,9 @@ import com.tongxie.copilotgo.data.agent.AgentToolResult
 import com.tongxie.copilotgo.data.agent.AgentToolSnapshot
 import com.tongxie.copilotgo.data.agent.AgentToolValidation
 import com.tongxie.copilotgo.data.chat.ChatStreamCenter
+import com.tongxie.copilotgo.data.chat.AgentRequestEncoder
 import com.tongxie.copilotgo.data.chat.CoreFixture
+import com.tongxie.copilotgo.data.chat.ModelTransport
 import com.tongxie.copilotgo.data.chat.SendResult
 import com.tongxie.copilotgo.data.chat.UiMessage
 import kotlinx.coroutines.CoroutineScope
@@ -33,15 +35,90 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import okhttp3.mockwebserver.MockResponse
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import java.util.Random
 import java.util.concurrent.atomic.AtomicInteger
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import javax.imageio.ImageIO
 
 class AgentAdmissionBudgetIntegrationTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test
+    fun responsesWireExpansionIsRejectedBeforeDurableAdmissionEvenWhenLegacyEncodingFits() = runBlocking {
+        CoreFixture(temporary.root).use { core ->
+            core.center.close()
+            core.models = {
+                MockResponse().setBody(
+                    """{"data":[{"id":"fixture-chat","supported_endpoints":["/responses"],"capabilities":{"type":"chat","supports":{"tool_calls":true}}}]}"""
+                )
+            }
+            core.create()
+            val model = core.catalog.requireModel("fixture-chat", needsVision = false, needsTools = true)
+            val settings = AgentSessionSettings(enabled = true)
+            val tools = listOf(AgentToolDescriptor(
+                AgentToolIdentity("fixture-config", 0, "fixture-read", "definition"),
+                "fixture_read", "Controlled fixture",
+                Json.parseToJsonElement("""{"type":"object","properties":{},"additionalProperties":false}""").jsonObject,
+                "https://example.com/controlled"
+            ))
+            val prompt = AgentPromptBuilder(
+                core.store.attachments,
+                clock = Clock.fixed(Instant.parse("2026-09-18T06:00:00Z"), ZoneOffset.UTC)
+            )
+            val initial = listOf(
+                UiMessage("old-u", "user", ""),
+                UiMessage("old-a", "assistant", "earlier reply"),
+                UiMessage("new-u", "user", "follow up")
+            )
+            val base = prompt.prepare(initial, model, tools.map { it.modelDefinition() }).request
+            val padding = settings.limits.maxContextBytes - AgentRequestEncoder.encode(base, core.json).byteCount - 1
+            val history = listOf(initial.first().copy(content = "x".repeat(padding))) + initial.drop(1)
+            val prepared = prompt.prepare(history, model, tools.map { it.modelDefinition() })
+            assertFalse(prepared.truncated)
+            assertTrue(AgentRequestEncoder.encode(prepared.request, core.json).byteCount < settings.limits.maxContextBytes)
+            assertTrue(AgentRequestEncoder.encode(
+                prepared.request, core.json, ModelTransport.RESPONSES
+            ).byteCount > settings.limits.maxContextBytes)
+            val oldMessages = history.dropLast(1)
+            core.store.update("fixture-session") {
+                it.copy(messages = oldMessages.toMutableList(), agentSettings = settings)
+            }
+            val modelCalls = AtomicInteger()
+            val job = SupervisorJob()
+            val executor = object : AgentToolExecutor {
+                override val revision = MutableStateFlow(0L)
+                override suspend fun snapshot() = AgentToolSnapshot(0, tools)
+                override fun isCurrent(identity: AgentToolIdentity) = tools.any { it.identity == identity }
+                override suspend fun validate(invocation: AgentToolInvocation): AgentToolValidation =
+                    throw AssertionError("Over-budget request must not propose a tool")
+                override suspend fun execute(invocation: AgentToolInvocation): AgentToolResult =
+                    throw AssertionError("Over-budget request must not execute a tool")
+            }
+            val center = ChatStreamCenter(
+                core.store, core.client, core.catalog, CoroutineScope(job + Dispatchers.Default),
+                agentRunner = AgentEngine(AgentModelTransport {
+                    modelCalls.incrementAndGet()
+                    flowOf(AgentStreamEvent.TextDelta("Unexpected request"), AgentStreamEvent.Completed("stop"))
+                }, executor, prompt, core.json)
+            )
+            try {
+                assertTrue(center.submit("fixture-session", "follow up", submissionId = "retained-draft") is SendResult.Rejected)
+                withTimeout(5_000) { center.sendingFlow("fixture-session").first { !it } }
+                assertEquals(0, modelCalls.get())
+                assertEquals(oldMessages, core.store.getSession("fixture-session")!!.messages)
+                assertEquals(settings, core.store.getSession("fixture-session")!!.agentSettings)
+            } finally {
+                center.close()
+                job.cancelAndJoin()
+            }
+        }
+    }
 
     @Test
     fun imageThatFitsWithoutToolsIsRejectedBeforeAdmissionWhenActualDefinitionsOverflow() = runBlocking {

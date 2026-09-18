@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.io.IOException
 
 class RemoteMcpService(
@@ -109,7 +110,7 @@ class RemoteMcpService(
         val catalog = client.catalog(lease.configurationId, lease.revision) ?: client.discover(lease)
         val tool = catalog.tools.firstOrNull { it.name == EXA_SEARCH_TOOL }
             ?: toolFailure(ToolProblemCode.SCHEMA, "Exa 未提供受支持的 web_search_exa 工具，请检查服务或稍后重试")
-        return client.call(lease, tool, arguments)
+        return client.call(lease, tool, exaSearchArguments(arguments, tool.input.definition))
     }
 
     private suspend fun discoverGuarded(
@@ -174,5 +175,19 @@ class RemoteMcpService(
     companion object {
         private const val EXA_SEARCH_TOOL = "web_search_exa"
         private const val DISCOVERY_TIMEOUT_MILLIS = 60_000L
+
+        internal fun exaSearchArguments(arguments: JsonObject, schema: JsonObject): JsonObject {
+            val properties = schema["properties"] as? JsonObject
+            if (properties?.containsKey("objective") != true) return arguments
+            // Hosted Exa can require a goal. Keep it fixed, not derived from private history
+            // or instructions in untrusted schema descriptions.
+            return JsonObject(arguments + ("objective" to JsonPrimitive(
+                "Find trustworthy public sources that answer the supplied query. Prefer official or primary sources. " +
+                    "For current-information queries, prioritize recent observations and identify publication/observation " +
+                    "dates and time zones. Extract relevant facts, figures, units and source URLs; for financial quotes " +
+                    "identify currency, market session and delays. Exclude irrelevant or unsupported claims. " +
+                    "Do not present historical values or forecasts as live observations."
+            )))
+        }
     }
 }

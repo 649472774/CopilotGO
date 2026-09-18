@@ -37,11 +37,15 @@ import com.tongxie.copilotgo.data.chat.CopilotChatClient
 import com.tongxie.copilotgo.data.chat.Session
 import com.tongxie.copilotgo.data.net.HttpClientProvider
 import com.tongxie.copilotgo.data.storage.AppPaths
+import com.tongxie.copilotgo.data.storage.SecretVault
 import com.tongxie.copilotgo.data.storage.SessionStore
 import com.tongxie.copilotgo.data.tools.McpServerSettings
+import com.tongxie.copilotgo.data.tools.ToolSettingsLimits
 import com.tongxie.copilotgo.data.tools.ToolSettingsSnapshot
 import com.tongxie.copilotgo.data.tools.ToolSettingsState
+import com.tongxie.copilotgo.data.tools.ToolSettingsStore
 import com.tongxie.copilotgo.data.tools.WebToolSettings
+import com.tongxie.copilotgo.data.tools.WebToolSettingsDraft
 import com.tongxie.copilotgo.ui.draft.ChatDraftStore
 import com.tongxie.copilotgo.ui.viewmodel.ChatDraftsViewModel
 import com.tongxie.copilotgo.ui.viewmodel.ChatViewModel
@@ -49,19 +53,28 @@ import com.tongxie.copilotgo.ui.viewmodel.LibraryFilesViewModel
 import com.tongxie.copilotgo.ui.viewmodel.SessionListViewModel
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -71,7 +84,11 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 
 /** Real controllers, engine and stores; only the model, credentials and tool boundary are synthetic. */
-internal class AgentControllerFixture(context: Context, val root: File) {
+internal class AgentControllerFixture(
+    context: Context,
+    val root: File,
+    private val automaticSearch: Boolean = false
+) {
     val id = "controller-fixture"
     val mainJob = SupervisorJob()
     val ioJob = SupervisorJob()
@@ -108,21 +125,37 @@ internal class AgentControllerFixture(context: Context, val root: File) {
     val auth = AuthRepository(credentials, DeviceFlowClient(provider, json), CopilotTokenClient(provider, json))
     val client = CopilotChatClient(provider, json, auth)
     val tools = ControllerTool()
+    val settingsVault = ControllerSettingsVault()
+    val toolSettings = if (automaticSearch) ToolSettingsStore(settingsVault, ioScope) else null
+    val automaticTools = toolSettings?.let { ControllerAutomaticWebTool(it, tools, mainScope) }
     val modelRequests = CopyOnWriteArrayList<AgentChatRequest>()
     private val model = AgentModelTransport { request ->
         modelRequests += request
         if (request.messages.any { it.role == "tool" }) {
-            flowOf(AgentStreamEvent.TextDelta("已读取受控工具资料 [S1]"), AgentStreamEvent.Completed("stop"))
+            flowOf(
+                AgentStreamEvent.TextDelta(
+                    if (automaticSearch) "已查询北京今日天气资料（合成测试结果）[S1]" else "已读取受控工具资料 [S1]"
+                ),
+                AgentStreamEvent.Completed("stop")
+            )
         } else {
             flowOf(AgentStreamEvent.Completed(
                 "tool_calls",
-                listOf(AgentToolCall("fixture-call", AgentFunctionCall("fixture_read", """{"query":"controlled"}""")))
+                listOf(if (automaticSearch) {
+                    AgentToolCall(
+                        "fixture-search-call",
+                        AgentFunctionCall(ControllerAutomaticWebTool.SEARCH_NAME, """{"query":"北京 今天 天气"}""")
+                    )
+                } else {
+                    AgentToolCall("fixture-call", AgentFunctionCall("fixture_read", """{"query":"controlled"}"""))
+                })
             ))
         }
     }
     val center = ChatStreamCenter(
         store, client, scope = mainScope,
-        agentRunner = AgentEngine(model, tools, AgentPromptBuilder(store.attachments))
+        agentRunner = AgentEngine(model, automaticTools ?: tools, AgentPromptBuilder(store.attachments)),
+        toolSettings = toolSettings
     )
     val uiOwner = ViewModelStore()
     val chatOwner = ViewModelStore()
@@ -136,7 +169,7 @@ internal class AgentControllerFixture(context: Context, val root: File) {
     lateinit var files: LibraryFilesViewModel
     var createdChatViews = 0
         private set
-    val publicSettings = ToolSettingsState(
+    val publicSettings: StateFlow<ToolSettingsState> = toolSettings?.state ?: MutableStateFlow(ToolSettingsState(
         loading = false,
         snapshot = ToolSettingsSnapshot(
             web = WebToolSettings(searchEnabled = false, pageReaderEnabled = false),
@@ -145,9 +178,16 @@ internal class AgentControllerFixture(context: Context, val root: File) {
                 enabledTools = setOf("fixture_read")
             ))
         )
-    )
+    ))
 
     suspend fun initialize(enabled: Boolean) {
+        toolSettings?.let { settings ->
+            val original = settings.awaitReady().web
+            settings.updateWeb(
+                WebToolSettingsDraft(original).copy(searchEnabled = false, pageReaderEnabled = false),
+                expectedRevision = original.revision
+            )
+        }
         auth.bootstrap()
         client.modelCatalog.refresh(force = true)
         check(client.modelCatalog.state.value.models.any { it.id == "fixture-model" })
@@ -182,6 +222,7 @@ internal class AgentControllerFixture(context: Context, val root: File) {
     suspend fun persistedDraft() = ChatDraftStore(File(privateContext.noBackupFilesDir, "ui-drafts")).load(id)
 
     fun close(): List<Job> {
+        settingsVault.writeGate.getAndSet(null)?.cancel()
         val jobs = listOf(drafts, models, files).mapNotNull { it.viewModelScope.coroutineContext[Job] }
         chatOwner.clear()
         uiOwner.clear()
@@ -191,6 +232,98 @@ internal class AgentControllerFixture(context: Context, val root: File) {
         provider.client.connectionPool.evictAll()
         provider.client.dispatcher.executorService.shutdown()
         return jobs + mainJob + ioJob
+    }
+}
+
+internal class ControllerSettingsVault : SecretVault {
+    private val records = ConcurrentHashMap<String, String>()
+    val writeGate = AtomicReference<CompletableDeferred<Unit>?>(null)
+    val writeAttempts = AtomicInteger()
+    override suspend fun read(name: String): String? = records[name]
+    override suspend fun write(name: String, value: String) {
+        writeAttempts.incrementAndGet()
+        writeGate.get()?.await()
+        records[name] = value
+    }
+
+    fun persistedWeb(): WebToolSettings {
+        val stored = Json.parseToJsonElement(requireNotNull(records[ToolSettingsStore.NAMESPACE])).jsonObject
+        return Json.decodeFromJsonElement(requireNotNull(stored["web"]?.jsonObject?.get("config")))
+    }
+}
+
+internal class ControllerAutomaticWebTool(
+    private val settings: ToolSettingsStore,
+    private val mcp: ControllerTool,
+    scope: CoroutineScope
+) : AgentToolExecutor {
+    override val revision = MutableStateFlow(0L)
+    val invocations = CopyOnWriteArrayList<AgentToolInvocation>()
+    private val schema = buildJsonObject {
+        put("type", "object")
+        put("properties", buildJsonObject { put("query", buildJsonObject { put("type", "string") }) })
+        put("required", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("query")) })
+        put("additionalProperties", false)
+    }
+
+    init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            settings.revisions.collect {
+                revision.value = settings.revisions.value[ToolSettingsLimits.WEB_CONFIGURATION_ID] ?: 0L
+            }
+        }
+    }
+
+    private fun descriptor(web: WebToolSettings) = AgentToolDescriptor(
+        AgentToolIdentity(ToolSettingsLimits.WEB_CONFIGURATION_ID, web.revision, SEARCH_NAME, "synthetic-search-v1"),
+        SEARCH_NAME, "受控公开搜索，不连接任何真实服务", schema, "https://example.com/synthetic-search",
+        AgentToolKind.PUBLIC_WEB_SEARCH
+    )
+
+    override suspend fun snapshot(): AgentToolSnapshot {
+        val web = settings.awaitReady().web
+        val currentRevision = settings.revisions.value[ToolSettingsLimits.WEB_CONFIGURATION_ID]
+            ?: throw AgentToolConfigurationChangedException()
+        revision.value = currentRevision
+        val search = if (web.searchEnabled && web.externalSharingConsent && web.automaticSearchConsent) {
+            listOf(descriptor(web))
+        } else emptyList()
+        return AgentToolSnapshot(currentRevision, search + mcp.snapshot().tools)
+    }
+
+    override fun isCurrent(identity: AgentToolIdentity): Boolean {
+        if (identity.configId != ToolSettingsLimits.WEB_CONFIGURATION_ID) return mcp.isCurrent(identity)
+        val current = settings.state.value
+        val web = current.snapshot?.web ?: return false
+        return !current.loading && current.problem == null && web.searchEnabled &&
+            web.externalSharingConsent && web.automaticSearchConsent &&
+            settings.revisions.value[ToolSettingsLimits.WEB_CONFIGURATION_ID] == identity.configRevision &&
+            identity == descriptor(web).identity
+    }
+
+    override suspend fun validate(invocation: AgentToolInvocation): AgentToolValidation {
+        if (invocation.tool.kind == AgentToolKind.MCP) return mcp.validate(invocation)
+        if (!isCurrent(invocation.tool.identity)) throw AgentToolConfigurationChangedException()
+        if (invocation.arguments.keys != setOf("query") ||
+            invocation.arguments["query"]?.jsonPrimitive?.isString != true
+        ) throw AgentToolException("受控搜索参数校验拒绝")
+        return AgentToolValidation(invocation.arguments)
+    }
+
+    override suspend fun execute(invocation: AgentToolInvocation): AgentToolResult {
+        if (invocation.tool.kind == AgentToolKind.MCP) return mcp.execute(invocation)
+        validate(invocation)
+        invocations += invocation
+        return AgentToolResult(
+            "北京今日天气资料：受控合成搜索结果，不代表真实天气。",
+            sources = listOf(SourceReference(SOURCE_URL, SOURCE_TITLE, SourceKind.SEARCH_HIT))
+        )
+    }
+
+    companion object {
+        const val SEARCH_NAME = "fixture_search"
+        const val SOURCE_URL = "https://example.com/beijing-weather-fixture"
+        const val SOURCE_TITLE = "北京今日天气：合成搜索来源"
     }
 }
 

@@ -8,6 +8,7 @@ import com.tongxie.copilotgo.data.agent.AgentApprovalDecision
 import com.tongxie.copilotgo.data.agent.AgentSessionSettings
 import com.tongxie.copilotgo.data.chat.AttachmentRef
 import com.tongxie.copilotgo.data.chat.ChatStreamCenter
+import com.tongxie.copilotgo.data.chat.OperationResult
 import com.tongxie.copilotgo.data.chat.SendResult
 
 class ChatViewModel(
@@ -32,6 +33,10 @@ class ChatViewModel(
 
     fun respondToApproval(binding: AgentApprovalBinding, decision: AgentApprovalDecision) =
         center.respondToApproval(sessionId, binding, decision)
+
+    fun needsAutomaticWebSearch(text: String): Boolean = center.needsAutomaticWebSearch(sessionId, text)
+    suspend fun authorizeAutomaticWebSearch(expectedRevision: Long): OperationResult =
+        center.authorizeAutomaticWebSearch(expectedRevision)
 
     suspend fun submit(
         text: String,

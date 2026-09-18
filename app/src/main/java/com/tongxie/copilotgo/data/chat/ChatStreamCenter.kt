@@ -16,6 +16,7 @@ import com.tongxie.copilotgo.data.agent.AgentRunner
 import com.tongxie.copilotgo.data.agent.AgentSessionSettings
 import com.tongxie.copilotgo.data.agent.AgentToolConfigurationChangedException
 import com.tongxie.copilotgo.data.agent.AgentToolException
+import com.tongxie.copilotgo.data.agent.AutomaticWebSearchPolicy
 import com.tongxie.copilotgo.data.agent.detached
 import com.tongxie.copilotgo.data.agent.interrupt
 import com.tongxie.copilotgo.data.net.networkErrorMessage
@@ -24,6 +25,9 @@ import com.tongxie.copilotgo.data.storage.AttachmentStore
 import com.tongxie.copilotgo.data.storage.SessionDeletedException
 import com.tongxie.copilotgo.data.storage.SessionStorageException
 import com.tongxie.copilotgo.data.storage.SessionStore
+import com.tongxie.copilotgo.data.tools.ToolException
+import com.tongxie.copilotgo.data.tools.ToolSettingsStore
+import com.tongxie.copilotgo.data.tools.WebToolSettingsDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +45,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.ZonedDateTime
 import java.util.UUID
 
 /** Application-owned operations. SessionStore owns all conversation state and metadata. */
@@ -50,7 +55,8 @@ class ChatStreamCenter(
     private val catalog: ModelCatalog = chatClient.modelCatalog,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     private val maxInactiveSessions: Int = 8,
-    private val agentRunner: AgentRunner? = null
+    private val agentRunner: AgentRunner? = null,
+    private val toolSettings: ToolSettingsStore? = null
 ) {
     private val guard = Any()
     private val slots = LinkedHashMap<String, Slot>(16, 0.75f, true)
@@ -117,6 +123,28 @@ class ChatStreamCenter(
     fun errorFlow(id: String): StateFlow<String?> = slot(id).error.asStateFlow()
     fun noticeFlow(id: String): StateFlow<String?> = slot(id).notice.asStateFlow()
     fun clearError(id: String) { slot(id).error.value = null }
+
+    fun needsAutomaticWebSearch(id: String, text: String): Boolean {
+        val session = sessionFlow(id).value ?: return false
+        return !session.agentSettings.enabled && session.agentSettings.automaticWebSearch &&
+            AutomaticWebSearchPolicy.requiresSearch(text, session.messages.lastOrNull { it.role == "user" }?.content)
+    }
+
+    suspend fun authorizeAutomaticWebSearch(expectedRevision: Long): OperationResult = try {
+        val settings = toolSettings ?: throw ModelUnavailableException("当前安装未配置联网搜索")
+        val web = settings.awaitReady().web
+        settings.updateWeb(
+            WebToolSettingsDraft(web).copy(
+                searchEnabled = true, externalSharingConsent = true, automaticSearchConsent = true
+            ),
+            expectedRevision
+        )
+        OperationResult.Accepted
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        OperationResult.Rejected(friendlyError(e))
+    }
 
     fun retain(id: String) {
         store.retain(id)
@@ -206,7 +234,21 @@ class ChatStreamCenter(
                 if (request is Request.New && request.agentSettings != null &&
                     request.agentSettings != original.agentSettings
                 ) throw ModelUnavailableException("Agent 设置已更新，请刷新后重新发送；草稿已保留")
-                val settings = original.agentSettings
+                val requiresSearch = AutomaticWebSearchPolicy.requiresSearch(history)
+                val automaticSearch = !original.agentSettings.enabled &&
+                    original.agentSettings.automaticWebSearch && requiresSearch
+                val web = if (automaticSearch) {
+                    val configured = toolSettings
+                        ?: throw ModelUnavailableException("当前安装未配置自动联网，请选择普通聊天或启用工具运行时")
+                    configured.awaitReady().web.also {
+                        if (!it.searchEnabled || !it.externalSharingConsent || !it.automaticSearchConsent) {
+                            throw ModelUnavailableException("本次问题需要联网，请先确认自动搜索的对外发送范围；草稿已保留")
+                        }
+                    }
+                } else null
+                val settings = if (automaticSearch) {
+                    original.agentSettings.copy(enabled = true, autoApprovePublicWebReads = true)
+                } else original.agentSettings
                 if (settings.enabled && agentRunner == null) {
                     throw ModelUnavailableException("当前安装尚未配置 Agent 工具运行时，请关闭 Agent 模式后聊天")
                 }
@@ -219,10 +261,20 @@ class ChatStreamCenter(
                 } else null
                 val preparedAgent = agentRun?.let {
                     requireNotNull(agentRunner).prepare(AgentRunInput(
-                        it.id, id, ticket.accountGeneration, model, history, settings, it.startedAt
+                        it.id, id, ticket.accountGeneration, model, history, settings, it.startedAt,
+                        requireWebSearch = requiresSearch,
+                        publicWebOnly = automaticSearch,
+                        expectedWebRevision = web?.revision
                     ))
                 }
-                val prompt = if (preparedAgent == null) promptBuilder.prepare(history, model) else null
+                val prompt = if (preparedAgent == null) promptBuilder.prepare(
+                    history, model,
+                    systemContext = "You are CopilotGO's cloud-connected assistant, not a local model. " +
+                        "Current device date/time: ${ZonedDateTime.now()}. " +
+                        "No web or other tools are attached to this request. Do not invent current facts, searches or sources. " +
+                        "If external information is needed, explain that automatic web search or Agent mode must be enabled. " +
+                        "Respond in the user's language."
+                ) else null
                 currentCoroutineContext().ensureActive()
                 synchronized(guard) { ticket.agentRunId = agentRun?.id }
                 assistantId = responseId
@@ -627,6 +679,7 @@ class ChatStreamCenter(
     }
 
     private fun friendlyError(error: Exception): String = when (error) {
+        is ToolException -> error.problem.message
         is AttachmentImportException -> error.userMessage
         is SessionStorageException -> error.userMessage
         is ModelUnavailableException -> error.message ?: "模型暂不可用"

@@ -103,7 +103,7 @@ class ToolSettingsViewModel(
     fun editSearch(transform: (WebToolSettingsDraft) -> WebToolSettingsDraft) {
         if (!available()) return
         val form = _state.value.search ?: return notReady()
-        val updated = form.copy(draft = transform(form.draft))
+        val updated = form.edit(transform(form.draft))
         if (updated != form) _state.value = _state.value.copy(search = updated, problem = null, savedNotice = false)
     }
 

@@ -224,6 +224,33 @@ class AgentSettingsAcceptanceTest {
         assertEquals("保存失败仍保留草稿", fixture.store.state.value.snapshot!!.servers.single().label)
     }
 
+    @Test fun automaticSearchPermissionIsSeparateAndSharingRevocationClearsItInDraftAndStore() {
+        val fixture = fixture(Route.SEARCH)
+        rule.setContent { FixtureTheme { SettingsRoutes(fixture) } }
+        scroll(SEARCH_LIST, "tool-automatic-search-consent").assertIsNotEnabled()
+        scroll(SEARCH_LIST, "tool-sharing-consent").performClick()
+        assertFalse(fixture.search.state.value.search!!.draft.automaticSearchConsent)
+        scroll(SEARCH_LIST, "tool-automatic-search-consent").assertIsEnabled().assertHeightIsAtLeast(48.dp).performClick()
+        assertTrue(fixture.search.state.value.search!!.draft.automaticSearchConsent)
+        scroll(SEARCH_LIST, "tool-settings-save").performClick()
+        rule.waitUntil(10_000) {
+            fixture.search.state.value.pending == null &&
+                fixture.store.state.value.snapshot?.web?.automaticSearchConsent == true
+        }
+        scroll(SEARCH_LIST, "tool-sharing-consent").performClick()
+        assertFalse(fixture.search.state.value.search!!.draft.automaticSearchConsent)
+        scroll(SEARCH_LIST, "tool-automatic-search-consent").assertIsNotEnabled()
+        scroll(SEARCH_LIST, "tool-settings-save").performClick()
+        rule.waitUntil(10_000) {
+            fixture.search.state.value.pending == null &&
+                fixture.store.state.value.snapshot?.web?.externalSharingConsent == false
+        }
+        assertFalse(fixture.store.state.value.snapshot!!.web.automaticSearchConsent)
+        scroll(SEARCH_LIST, "tool-sharing-consent").performClick()
+        assertFalse(fixture.search.state.value.search!!.draft.automaticSearchConsent)
+        assertEquals(0, fixture.provider.readinessCalls.get())
+    }
+
     @Test fun backgroundClearsSecretButNotTheDraftAndSavedKeysNeverReadBack() {
         val fixture = fixture(Route.SEARCH)
         rule.setContent { FixtureTheme { SettingsRoutes(fixture) } }

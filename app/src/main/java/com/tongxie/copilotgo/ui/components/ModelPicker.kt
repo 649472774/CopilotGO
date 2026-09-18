@@ -54,12 +54,15 @@ fun ModelPickerInline(
     isStale: Boolean = false,
     onRefresh: () -> Unit = {},
     compact: Boolean = false,
-    headingText: String? = null
+    headingText: String? = null,
+    needsVision: Boolean = false,
+    needsTools: Boolean = false
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var queryTooLong by remember { mutableStateOf(false) }
     val current = models.firstOrNull { it.id == currentModel }
+    val unavailableReason = current?.unavailableReason(needsVision, needsTools)
     val label = current?.name?.ifBlank { null } ?: currentModel.ifBlank {
         stringResource(R.string.model_picker_title)
     }
@@ -67,6 +70,7 @@ fun ModelPickerInline(
         loading -> stringResource(R.string.model_loading)
         error != null -> error
         currentModel.isNotBlank() && current == null -> stringResource(R.string.model_unavailable)
+        unavailableReason != null -> unavailableReason
         isStale -> stringResource(R.string.model_cached)
         else -> null
     }
@@ -102,17 +106,17 @@ fun ModelPickerInline(
             }
             if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             else if (compact && status != null) Icon(
-                if (isStale && error == null && current != null) Icons.Default.Info else Icons.Default.ErrorOutline,
+                if (isStale && error == null && current != null && unavailableReason == null) Icons.Default.Info else Icons.Default.ErrorOutline,
                 contentDescription = null,
-                tint = if (isStale && error == null && current != null) MaterialTheme.colorScheme.onSurfaceVariant
+                tint = if (isStale && error == null && current != null && unavailableReason == null) MaterialTheme.colorScheme.onSurfaceVariant
                     else MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(20.dp)
             )
             else Icon(Icons.Default.ArrowDropDown, contentDescription = null)
         }
-        if (!compact && !loading && currentModel.isNotBlank() && current == null) {
+        if (!compact && !loading && currentModel.isNotBlank() && (current == null || unavailableReason != null)) {
             Text(
-                stringResource(R.string.model_unavailable),
+                unavailableReason ?: stringResource(R.string.model_unavailable),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error
             )
@@ -129,8 +133,8 @@ fun ModelPickerInline(
         val filtered = remember(models, query) {
             val search = query.trim()
             models.filter {
-                search.isEmpty() || it.id.contains(search, ignoreCase = true) ||
-                    it.name.orEmpty().contains(search, ignoreCase = true)
+                it.pickerVisible && (search.isEmpty() || it.id.contains(search, ignoreCase = true) ||
+                    it.name.orEmpty().contains(search, ignoreCase = true))
             }
         }
         AlertDialog(
@@ -190,11 +194,13 @@ fun ModelPickerInline(
                         }
                     }
                     items(filtered, key = { it.id }) { model ->
+                        val reason = model.unavailableReason(needsVision, needsTools)
+                        val selectable = enabled && !loading && !isStale && reason == null
                         Row(
                             Modifier.fillMaxWidth().heightIn(min = 48.dp)
                                 .selectable(
                                     selected = model.id == currentModel,
-                                    enabled = enabled,
+                                    enabled = selectable,
                                     role = Role.RadioButton,
                                     onClick = { onSelect(model.id); expanded = false }
                                 )
@@ -202,7 +208,7 @@ fun ModelPickerInline(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            RadioButton(selected = model.id == currentModel, onClick = null, enabled = enabled)
+                            RadioButton(selected = model.id == currentModel, onClick = null, enabled = selectable)
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     model.name?.ifBlank { null } ?: model.id,
@@ -217,6 +223,13 @@ fun ModelPickerInline(
                                         overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    if (reason != null) {
+                                        Text(
+                                            reason,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
                                 }
                                 Text(
                                     stringResource(when (model.capabilities?.supports?.vision) {

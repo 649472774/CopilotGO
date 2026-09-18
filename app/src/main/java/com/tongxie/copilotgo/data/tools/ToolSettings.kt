@@ -34,7 +34,8 @@ data class WebToolSettings(
     val pageReaderEnabled: Boolean = true,
     val provider: SearchProvider = SearchProvider.EXA_KEYLESS,
     val externalSharingConsent: Boolean = false,
-    val credentialState: ToolCredentialState = ToolCredentialState.MISSING
+    val credentialState: ToolCredentialState = ToolCredentialState.MISSING,
+    val automaticSearchConsent: Boolean = false
 )
 
 @Serializable
@@ -68,11 +69,12 @@ data class WebToolSettingsDraft(
     val searchEnabled: Boolean,
     val pageReaderEnabled: Boolean,
     val provider: SearchProvider,
-    val externalSharingConsent: Boolean
+    val externalSharingConsent: Boolean,
+    val automaticSearchConsent: Boolean = false
 ) {
     constructor(settings: WebToolSettings) : this(
         settings.searchEnabled, settings.pageReaderEnabled,
-        settings.provider, settings.externalSharingConsent
+        settings.provider, settings.externalSharingConsent, settings.automaticSearchConsent
     )
 }
 

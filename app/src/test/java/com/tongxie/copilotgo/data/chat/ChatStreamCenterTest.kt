@@ -149,7 +149,8 @@ class ChatStreamCenterTest {
             fixture.idle()
             val body = fixture.requests.first { it.path == "/chat/completions" }.body.readUtf8()
             val sent = fixture.json.decodeFromString(VisionRequest.serializer(), body)
-            assertEquals(image, sent.messages.first().content.first { it.type == "image_url" }.imageUrl!!.url)
+            assertEquals(1, sent.messages.count { it.role == "system" })
+            assertEquals(image, sent.messages.first { it.role == "user" }.content.first { it.type == "image_url" }.imageUrl!!.url)
             assertEquals("fixture-chat", fixture.store.getSession("fixture-session")!!.model)
             assertFalse(File(fixture.paths.sessions, "fixture-session.json").readText().contains("data:image"))
         }
@@ -276,7 +277,11 @@ class ChatStreamCenterTest {
             val sent = fixture.json.decodeFromString(
                 ChatRequest.serializer(), fixture.requests.single { it.path == "/chat/completions" }.body.readUtf8()
             )
-            assertEquals(listOf("first question", "first answer", "new question"), sent.messages.map { it.content })
+            assertEquals(1, sent.messages.count { it.role == "system" })
+            assertEquals(
+                listOf("first question", "first answer", "new question"),
+                sent.messages.filter { it.role != "system" }.map { it.content }
+            )
         }
     }
 

@@ -43,17 +43,15 @@ internal object ExaSearchParser {
                                 if (current.url == null) pending = null
                             }
                         }
-                        line.isBlank() || line.startsWith("Published Date:") ||
-                            line.startsWith("Author:") || line.startsWith("ID:") -> Unit
+                        line.startsWith("Published Date:") || line.startsWith("Published:") ->
+                            current.appendExcerpt(line)
+                        line.isBlank() || line.startsWith("Author:") || line.startsWith("ID:") -> Unit
                         else -> pending = null
                     }
                 }
                 else -> {
                     val current = checkNotNull(pending)
-                    if (current.excerpt.length < 2400) {
-                        if (current.excerpt.isNotEmpty()) current.excerpt.append('\n')
-                        current.excerpt.append(line.removePrefix("Text:").trim().take(2400 - current.excerpt.length))
-                    }
+                    current.appendExcerpt(line.removePrefix("Text:").trim())
                 }
             }
         }
@@ -94,5 +92,11 @@ internal object ExaSearchParser {
 
     private class Record(val title: String, var url: String? = null) {
         val excerpt = StringBuilder()
+
+        fun appendExcerpt(line: String) {
+            if (excerpt.length >= 2400) return
+            if (excerpt.isNotEmpty()) excerpt.append('\n')
+            excerpt.append(line.take(2400 - excerpt.length))
+        }
     }
 }

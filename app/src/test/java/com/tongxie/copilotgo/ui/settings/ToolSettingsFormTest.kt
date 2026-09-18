@@ -155,6 +155,38 @@ class ToolSettingsFormTest {
         }
     }
 
+    @Test fun automaticSearchIsDistinctFromSharingAndSurvivesUnrelatedEdits() {
+        val sharingOnly = ToolSearchForm(WebToolSettings(externalSharingConsent = true))
+        assertFalse(sharingOnly.draft.automaticSearchConsent)
+        val form = ToolSearchForm(WebToolSettings(externalSharingConsent = true, automaticSearchConsent = true))
+        assertTrue(form.draft.automaticSearchConsent)
+        assertFalse(form.dirty)
+        val edited = form.edit(form.draft.copy(pageReaderEnabled = false))
+        assertTrue(edited.draft.automaticSearchConsent)
+        assertTrue(edited.dirty)
+    }
+
+    @Test fun revokingSharingAlsoRevokesAutomaticSearchAndReconsentingDoesNotRestoreIt() {
+        val form = ToolSearchForm(WebToolSettings(externalSharingConsent = true, automaticSearchConsent = true))
+        val revoked = form.edit(form.draft.copy(externalSharingConsent = false))
+        assertFalse(revoked.draft.externalSharingConsent)
+        assertFalse(revoked.draft.automaticSearchConsent)
+        val sharingAgain = revoked.edit(revoked.draft.copy(externalSharingConsent = true))
+        assertTrue(sharingAgain.draft.externalSharingConsent)
+        assertFalse(sharingAgain.draft.automaticSearchConsent)
+        assertFalse(revoked.edit(revoked.draft.copy(automaticSearchConsent = true)).draft.automaticSearchConsent)
+    }
+
+    @Test fun revokingOnlyAutomaticSearchPreservesManualToolSettings() {
+        val form = ToolSearchForm(WebToolSettings(externalSharingConsent = true, automaticSearchConsent = true))
+        val revoked = form.edit(form.draft.copy(automaticSearchConsent = false))
+        assertFalse(revoked.draft.automaticSearchConsent)
+        assertTrue(revoked.draft.externalSharingConsent)
+        assertTrue(revoked.draft.searchEnabled)
+        assertTrue(revoked.draft.pageReaderEnabled)
+        assertTrue(revoked.dirty)
+    }
+
     @Test fun aNewBlankFormIsCleanAndAValidHttpsDraftCanBeSaved() {
         assertFalse(newForm().dirty)
         assertTrue(newForm().edit(validDraft()).dirty)

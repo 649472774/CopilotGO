@@ -132,5 +132,7 @@ class AppContainer(app: CopilotGoApp) {
     )
 
     /** Application-owned streaming; the session store remains the live state authority. */
-    val chatStreamCenter = ChatStreamCenter(sessionStore, chatClient, agentRunner = agentEngine)
+    val chatStreamCenter = ChatStreamCenter(
+        sessionStore, chatClient, agentRunner = agentEngine, toolSettings = toolSettings
+    )
 }

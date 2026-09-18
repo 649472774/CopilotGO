@@ -53,6 +53,10 @@ data class ToolSearchForm(
         get() = draft != WebToolSettingsDraft(original) || credentialAction != ToolCredentialAction.KEEP
 
     fun isStale(current: WebToolSettings?): Boolean = current?.revision != original.revision
+
+    fun edit(next: WebToolSettingsDraft): ToolSearchForm = copy(
+        draft = if (next.externalSharingConsent) next else next.copy(automaticSearchConsent = false)
+    )
 }
 
 data class ToolMcpForm(

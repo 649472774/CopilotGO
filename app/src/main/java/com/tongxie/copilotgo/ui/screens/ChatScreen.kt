@@ -92,6 +92,7 @@ import com.tongxie.copilotgo.data.chat.AttachmentKind
 import com.tongxie.copilotgo.data.chat.AttachmentRef
 import com.tongxie.copilotgo.data.chat.ModelCatalogState
 import com.tongxie.copilotgo.data.chat.OperationResult
+import com.tongxie.copilotgo.data.chat.SendResult
 import com.tongxie.copilotgo.data.chat.Session
 import com.tongxie.copilotgo.data.chat.SessionLoadState
 import com.tongxie.copilotgo.data.chat.UiMessage
@@ -110,9 +111,11 @@ import com.tongxie.copilotgo.ui.agent.AgentModeButton
 import com.tongxie.copilotgo.ui.agent.AgentModeDialog
 import com.tongxie.copilotgo.ui.agent.AgentRunDetailsDialog
 import com.tongxie.copilotgo.ui.agent.AgentToolbarActivity
-import com.tongxie.copilotgo.ui.agent.agentModelDisabledReason
+import com.tongxie.copilotgo.ui.agent.AutomaticSearchConsentDialog
+import com.tongxie.copilotgo.ui.agent.AutomaticSearchSubmission
 import com.tongxie.copilotgo.ui.agent.agentToolDisclosure
 import com.tongxie.copilotgo.ui.agent.hasConsentedPublicWebTools
+import com.tongxie.copilotgo.ui.agent.hasAutomaticSearchConsent
 import com.tongxie.copilotgo.ui.agent.agentCitationLinks
 import com.tongxie.copilotgo.ui.agent.blockedAgentReplayMessageIds
 import com.tongxie.copilotgo.ui.agent.rememberAgentSourceOpener
@@ -215,8 +218,36 @@ fun ChatScreen(
     var changingModel by remember { mutableStateOf(false) }
     var changingAgentSettings by remember { mutableStateOf(false) }
     var showAgentMode by rememberSaveable(sessionId) { mutableStateOf(false) }
+    var automaticSearchSubmission by remember(sessionId) { mutableStateOf<AutomaticSearchSubmission?>(null) }
     var agentSettingsError by remember { mutableStateOf<String?>(null) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    fun isSubmissionCurrent(submission: AutomaticSearchSubmission): Boolean {
+        val current = viewModel.session.value
+        return submission.sessionId == sessionId &&
+            submission.matches(current?.id, draftFlow.value.draft, current?.agentSettings)
+    }
+    fun submitDraft(submission: AutomaticSearchSubmission) {
+        if (!isSubmissionCurrent(submission)) {
+            scope.launch { snackbar.showSnackbar(context.getString(R.string.automatic_search_stale_submission)) }
+            return
+        }
+        draftsVm.submit(sessionId) { snapshot ->
+            val current = viewModel.session.value
+            val currentCatalog = modelsVm.catalogState.value
+            if (!isSubmissionCurrent(submission) || !submission.matches(current?.id, snapshot, current?.agentSettings)) {
+                SendResult.Rejected(context.getString(R.string.automatic_search_stale_submission))
+            } else if (currentCatalog.loading || currentCatalog.isStale) {
+                SendResult.Rejected(context.getString(R.string.model_refresh_before_send))
+            } else {
+                viewModel.submit(
+                    snapshot.text.trim(),
+                    attachmentRefs = snapshot.attachments,
+                    submissionId = snapshot.submissionId,
+                    agentSettings = submission.agentSettings
+                )
+            }
+        }
+    }
     fun requestAction(kind: String, message: UiMessage) {
         if (kind == "edit" && message.content.length > DraftLimits.TEXT_CHARS) {
             scope.launch { snackbar.showSnackbar(context.getString(R.string.message_edit_limit)) }
@@ -249,6 +280,10 @@ fun ChatScreen(
             }
         }
     } else {
+        val automaticSearchNeeded = remember(
+            viewModel, draft.draft.text, loaded.agentSettings,
+            loaded.messages.lastOrNull { it.role == "user" }?.content
+        ) { viewModel.needsAutomaticWebSearch(draft.draft.text) }
         ChatContent(
             session = loaded,
             catalog = catalog,
@@ -271,6 +306,7 @@ fun ChatScreen(
                 }
             },
             changingModel = changingModel,
+            automaticSearchNeeded = automaticSearchNeeded,
             agentChanging = changingAgentSettings,
             onOpenAgentMode = { agentSettingsError = null; showAgentMode = true },
             onAgentDecision = viewModel::respondToApproval,
@@ -287,14 +323,19 @@ fun ChatScreen(
             onRefreshModels = { modelsVm.refreshModels(force = true) },
             onTextChange = { draftsVm.updateText(sessionId, it) },
             onSend = {
-                val submittedSettings = loaded.agentSettings
-                draftsVm.submit(sessionId) { snapshot ->
-                    viewModel.submit(
-                        snapshot.text.trim(),
-                        attachmentRefs = snapshot.attachments,
-                        submissionId = snapshot.submissionId,
-                        agentSettings = submittedSettings
-                    )
+                val current = viewModel.session.value
+                val currentDraft = draftFlow.value
+                if (current != null && current.id == sessionId && automaticSearchSubmission == null &&
+                    !currentDraft.loading && !currentDraft.loadFailed && !currentDraft.importing &&
+                    !currentDraft.submitting && !currentDraft.draft.isEmpty &&
+                    !viewModel.sending.value && !changingAgentSettings && !changingModel
+                ) {
+                    val submission = AutomaticSearchSubmission(current.id, currentDraft.draft, current.agentSettings)
+                    if (viewModel.needsAutomaticWebSearch(submission.draft.text) && !hasAutomaticSearchConsent(toolSettings)) {
+                        automaticSearchSubmission = submission
+                    } else {
+                        submitDraft(submission)
+                    }
                 }
             },
             onStop = viewModel::stopStreaming,
@@ -349,6 +390,18 @@ fun ChatScreen(
                     }
                 }
             }
+        )
+    }
+
+    automaticSearchSubmission?.let { submission ->
+        AutomaticSearchConsentDialog(
+            submission = submission,
+            toolSettings = toolSettings,
+            isSubmissionCurrent = ::isSubmissionCurrent,
+            onAuthorize = viewModel::authorizeAutomaticWebSearch,
+            onAuthorized = ::submitDraft,
+            onOpenTools = onOpenTools,
+            onDismiss = { automaticSearchSubmission = null }
         )
     }
 
@@ -493,7 +546,8 @@ fun ChatContent(
     agentChanging: Boolean = false,
     onOpenAgentMode: (() -> Unit)? = null,
     onAgentDecision: ((AgentApprovalBinding, AgentApprovalDecision) -> AgentApprovalResponse)? = null,
-    onOpenAgentSource: ((String) -> Unit)? = null
+    onOpenAgentSource: ((String) -> Unit)? = null,
+    automaticSearchNeeded: Boolean = false
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -527,10 +581,14 @@ fun ChatContent(
     val anchor = session.messages.size
     val currentAnchor by rememberUpdatedState(anchor)
     val model = catalog.models.firstOrNull { it.id == session.model }
-    val agentDisabledReason = if (session.agentSettings.enabled) agentModelDisabledReason(model) else null
-    val images = draft.draft.attachments.any { it.kind == AttachmentKind.IMAGE }
-    val canSubmit = model?.chatCompatible == true && !changingModel && !agentChanging &&
-        agentDisabledReason == null && (!images || model.supportsVision)
+    val images = draft.draft.attachments.any { it.kind == AttachmentKind.IMAGE } ||
+        session.messages.any { message ->
+            message.imageUrls.isNotEmpty() || message.attachments.any { it.kind == AttachmentKind.IMAGE }
+        }
+    val needsTools = session.agentSettings.enabled || automaticSearchNeeded
+    val modelProblem = model?.unavailableReason(needsVision = images, needsTools = needsTools)
+    val canSubmit = model != null && modelProblem == null && !changingModel && !agentChanging &&
+        !catalog.loading && !catalog.isStale
     val attachmentItems = remember(draft.draft.attachments) {
         draft.draft.attachments.map { it.toUiAttachment(attachmentFile) }
     }
@@ -653,13 +711,15 @@ fun ChatContent(
                                     isStale = catalog.isStale,
                                     onRefresh = onRefreshModels,
                                     compact = true,
-                                    headingText = session.title.ifBlank { stringResource(R.string.chat_title) }
+                                    headingText = session.title.ifBlank { stringResource(R.string.chat_title) },
+                                    needsVision = images,
+                                    needsTools = needsTools
                                 )
                                 if (activeRun != null) {
                                     AgentToolbarActivity(activeRun) { reviewRun(activeRun) }
                                 } else if (onOpenAgentMode != null) {
                                     AgentModeButton(
-                                        enabled = session.agentSettings.enabled,
+                                        settings = session.agentSettings,
                                         onClick = { focus.clearFocus(); keyboard?.hide(); onOpenAgentMode() },
                                         interactive = !sending && !draft.submitting && !changingModel && !agentChanging
                                     )
@@ -699,9 +759,10 @@ fun ChatContent(
                                 draft.loading -> stringResource(R.string.draft_loading)
                                 changingModel -> stringResource(R.string.model_changing)
                                 agentChanging -> stringResource(R.string.state_saving)
+                                catalog.loading -> stringResource(R.string.model_loading)
+                                catalog.isStale -> stringResource(R.string.model_refresh_before_send)
                                 model == null -> stringResource(R.string.chat_select_model)
-                                agentDisabledReason != null -> stringResource(agentDisabledReason)
-                                images && !model.supportsVision -> stringResource(R.string.chat_model_no_vision)
+                                modelProblem != null -> modelProblem
                                 else -> null
                             },
                             notice = {

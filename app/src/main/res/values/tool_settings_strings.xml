@@ -25,7 +25,7 @@
     <string name="tool_settings_continue">继续编辑</string>
     <string name="tool_settings_discard">放弃修改</string>
     <string name="tool_settings_cancel">取消</string>
-    <string name="tool_settings_overview_detail">这些设置只控制 Agent 的可用工具。普通聊天不会因此自动联网。工具执行仍需遵守每次任务的授权，发现成功不等于自动批准执行。</string>
+    <string name="tool_settings_overview_detail">这些设置控制自动联网和 Agent 的可用工具。自动模式在单独授权后按需搜索，普通聊天不调用工具。MCP 仍需逐次审批，发现成功不等于自动批准执行。</string>
     <string name="tool_settings_search_open">配置搜索与网页读取</string>
     <string name="tool_settings_search_summary">搜索：%1$s；网页读取：%2$s\n提供方：%3$s；外部分享：%4$s</string>
     <string name="tool_settings_on">已启用</string>
@@ -42,7 +42,7 @@
     <string name="tool_settings_server_revision">已保存的配置版本：%1$d</string>
     <string name="tool_settings_server_selection">已选择 %1$d 个工具；实际可用性还需当前版本的发现检查。</string>
     <string name="tool_settings_enabled_search">允许联网搜索</string>
-    <string name="tool_settings_enabled_search_detail">仅在 Agent 任务需要搜索且已获授权时发送搜索词；不会改变普通聊天。</string>
+    <string name="tool_settings_enabled_search_detail">自动联网或 Agent 任务需要搜索且已获授权时才发送搜索词；普通聊天仍不调用工具。</string>
     <string name="tool_settings_enabled_page">允许读取网页</string>
     <string name="tool_settings_enabled_page_detail">只读取允许的公开 HTTPS 网页。MCP 的局域网授权不会授予网页读取器。</string>
     <string name="tool_settings_provider_title">搜索提供方</string>

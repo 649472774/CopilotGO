@@ -147,6 +147,26 @@ class ToolSettingsViewModelTest {
         assertTrue(fixture.methods.isEmpty())
     }
 
+    @Test fun searchEditorRevokesAutomaticConsentBeforeSavingAndDoesNotRestoreItWithSharing() = runBlocking {
+        val fixture = fixture()
+        val vm = fixture.vm
+        vm.openSearch()
+        vm.editSearch { it.copy(externalSharingConsent = true, automaticSearchConsent = true) }
+        vm.saveSearch()
+        fixture.awaitSaved()
+        assertTrue(fixture.store.state.value.snapshot!!.web.automaticSearchConsent)
+        vm.editSearch { it.copy(externalSharingConsent = false) }
+        assertFalse(vm.state.value.search!!.draft.automaticSearchConsent)
+        vm.editSearch { it.copy(externalSharingConsent = true) }
+        assertFalse(vm.state.value.search!!.draft.automaticSearchConsent)
+        vm.saveSearch()
+        fixture.awaitSaved()
+        val saved = fixture.store.state.value.snapshot!!.web
+        assertTrue(saved.externalSharingConsent)
+        assertFalse(saved.automaticSearchConsent)
+        assertTrue(fixture.methods.isEmpty())
+    }
+
     @Test fun duplicatePendingWritesAndEditsAreRejectedWithoutReplacingTheSubmittedDraft() = runBlocking {
         val fixture = fixture()
         val vm = fixture.vm

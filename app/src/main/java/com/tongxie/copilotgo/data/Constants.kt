@@ -11,11 +11,14 @@ object Constants {
     const val COPILOT_CHAT_URL = "$COPILOT_API_BASE/chat/completions"
     const val COPILOT_MODELS_URL = "$COPILOT_API_BASE/models"
 
-    const val EDITOR_VERSION = "vscode/1.99.3"
-    const val EDITOR_PLUGIN_VERSION = "copilot-chat/0.24.0"
-    const val USER_AGENT_VSCODE = "GitHubCopilotChat/0.24.0"
+    // Protocol compatibility baseline: microsoft/vscode-copilot-chat v0.43.0.
+    const val EDITOR_VERSION = "vscode/1.115.0"
+    const val EDITOR_PLUGIN_VERSION = "copilot-chat/0.43.0"
+    const val USER_AGENT_VSCODE = "GitHubCopilotChat/0.43.0"
+    const val COPILOT_API_VERSION = "2025-05-01"
     const val COPILOT_INTEGRATION_ID = "vscode-chat"
-    const val OPENAI_INTENT = "conversation-edits"
+    const val OPENAI_INTENT = "conversation-panel"
+    const val AGENT_INTENT = "conversation-agent"
 
     const val APP_DATA_DIR_NAME = "CopilotGoData"
 

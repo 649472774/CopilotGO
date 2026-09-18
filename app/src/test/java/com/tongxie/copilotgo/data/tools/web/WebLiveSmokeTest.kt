@@ -21,9 +21,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.net.Proxy
+import java.time.LocalDate
+import java.time.ZoneId
 
 /** Explicit opt-in only; never reads application accounts, real vaults, cookies, or local attachments. */
 class WebLiveSmokeTest {
+    @Test
+    fun weatherAndStockQueriesReturnActualSourcesWhenOptedIn() = runBlocking {
+        assumeTrue(System.getenv("COPILOTGO_LIVE_WEB_SMOKE") == "1")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val settings = ToolSettingsStore(ToolMemoryVault(), scope)
+            val original = settings.awaitReady().web
+            val web = settings.updateWeb(
+                WebToolSettingsDraft(true, true, SearchProvider.EXA_KEYLESS, true), original.revision
+            )
+            val http = ToolHttpClient(directFixtureProvider())
+            val remote = RemoteMcpService(settings, http, scope)
+            val service = WebToolService(settings, http, remote)
+            val date = LocalDate.now(ZoneId.of("Asia/Shanghai"))
+            for (query in listOf(
+                "Beijing China weather forecast $date",
+                "Microsoft MSFT stock latest quote price market timestamp $date"
+            )) {
+                val result = service.search(query, numResults = 3, expectedRevision = web.revision)
+                assertFalse(result.isError)
+                assertTrue(result.sources.isNotEmpty())
+                assertTrue(result.sources.all { it.kind == SourceKind.SEARCH_HIT })
+                assertTrue(result.content.contains("并非来源发布时间或行情时间"))
+                println("LIVE_CURRENT_QUERY=$query")
+                result.sources.forEach { println("LIVE_CURRENT_SOURCE=${it.url}") }
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test
     fun keylessExaReturnsActualDocumentationSourcesWhenOptedIn() = runBlocking {
         assumeTrue(System.getenv("COPILOTGO_LIVE_WEB_SMOKE") == "1")
@@ -38,6 +71,8 @@ class WebLiveSmokeTest {
             val remote = RemoteMcpService(settings, http, scope)
             val discovery = remote.discoverSearch(web.revision)
             assertTrue(discovery.tools.any { it.name == "web_search_exa" && it.supported })
+            println("LIVE_KEYLESS_MCP_VERSION=${discovery.protocolVersion}")
+            println("LIVE_KEYLESS_INPUT_SCHEMA=${discovery.tools.single { it.name == "web_search_exa" }.inputSchema}")
             val result = WebToolService(settings, http, remote).search(
                 "official Jetpack Compose documentation site:developer.android.com/develop/ui/compose",
                 numResults = 3,
@@ -47,7 +82,6 @@ class WebLiveSmokeTest {
             assertTrue(result.sources.isNotEmpty())
             assertTrue(result.sources.any { it.url.toHttpUrl().host == "developer.android.com" })
             assertTrue(result.sources.all { it.kind == SourceKind.SEARCH_HIT })
-            println("LIVE_KEYLESS_MCP_VERSION=${discovery.protocolVersion}")
             result.sources.forEach { println("LIVE_KEYLESS_SOURCE=${it.url}") }
         } finally {
             scope.cancel()

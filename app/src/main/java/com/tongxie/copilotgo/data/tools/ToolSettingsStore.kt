@@ -101,7 +101,8 @@ class ToolSettingsStore(
                 pageReaderEnabled = draft.pageReaderEnabled,
                 provider = draft.provider,
                 externalSharingConsent = draft.externalSharingConsent,
-                credentialState = credentialState(secret)
+                credentialState = credentialState(secret),
+                automaticSearchConsent = draft.externalSharingConsent && draft.automaticSearchConsent
             )
             val next = current.copy(
                 nextRevision = increment(current.nextRevision),
@@ -344,6 +345,7 @@ class ToolSettingsStore(
         require(value.formatVersion == 1 && value.nextRevision > value.web.config.revision)
         require(value.web.config.revision > 0 && value.servers.size <= ToolSettingsLimits.MAX_SERVERS)
         require(value.web.config.credentialState == credentialState(value.web.credential))
+        require(!value.web.config.automaticSearchConsent || value.web.config.externalSharingConsent)
         value.web.credential?.let(::validateSecret)
         require(value.web.config.provider != SearchProvider.EXA_API_KEY || value.web.credential != null)
         require(value.servers.map { it.config.id }.distinct().size == value.servers.size)

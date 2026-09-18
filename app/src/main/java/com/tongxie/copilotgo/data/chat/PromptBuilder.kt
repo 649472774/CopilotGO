@@ -14,9 +14,15 @@ data class PreparedPrompt(
 
 /** Bounds the wire prompt, never the stored conversation, and never cuts a turn in half. */
 class PromptBuilder(private val attachments: AttachmentStore) {
-    suspend fun prepare(messages: List<UiMessage>, model: ModelInfo): PreparedPrompt =
+    suspend fun prepare(
+        messages: List<UiMessage>,
+        model: ModelInfo,
+        systemContext: String? = null
+    ): PreparedPrompt =
         withContext(Dispatchers.IO) {
-            val systems = messages.filter { it.role == "system" }
+            val systems = listOfNotNull(systemContext?.let {
+                UiMessage("copilotgo-request-context", "system", it)
+            }) + messages.filter { it.role == "system" }
             val turns = mutableListOf<MutableList<UiMessage>>()
             for (message in messages) {
                 when (message.role) {

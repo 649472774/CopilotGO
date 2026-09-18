@@ -79,6 +79,11 @@ data class ModelListResponse(
     val data: List<ModelInfo>
 )
 
+enum class ModelTransport(val endpoint: String) {
+    CHAT_COMPLETIONS("/chat/completions"),
+    RESPONSES("/responses")
+}
+
 @Serializable
 data class ModelInfo(
     val id: String,
@@ -91,11 +96,34 @@ data class ModelInfo(
 ) {
     val supportsVision: Boolean get() = capabilities?.supports?.vision == true
     val supportsTools: Boolean get() = capabilities?.supports?.toolCalls == true
-    val chatCompatible: Boolean
+    val pickerVisible: Boolean
         get() = id.isNotBlank() && modelPickerEnabled &&
-            (capabilities?.type == null || capabilities.type == "chat") &&
-            (supportedEndpoints == null || "/chat/completions" in supportedEndpoints) &&
-            policy?.state != "disabled"
+            (capabilities?.type == null || capabilities.type == "chat")
+
+    // Match Copilot's advertised transport preference; an explicit empty list is not a legacy model.
+    val transport: ModelTransport?
+        get() = when {
+            supportedEndpoints == null -> ModelTransport.CHAT_COMPLETIONS
+            ModelTransport.RESPONSES.endpoint in supportedEndpoints -> ModelTransport.RESPONSES
+            ModelTransport.CHAT_COMPLETIONS.endpoint in supportedEndpoints -> ModelTransport.CHAT_COMPLETIONS
+            else -> null
+        }
+
+    val chatCompatible: Boolean get() = unavailableReason() == null
+
+    fun unavailableReason(needsVision: Boolean = false, needsTools: Boolean = false): String? = when {
+        !pickerVisible -> "服务端未将此模型开放为可选聊天模型"
+        policy?.state != null && policy.state != "enabled" ->
+            if (policy.state == "disabled") "此模型已被账号或组织策略停用"
+            else "此模型尚未获得服务端使用授权，请检查账号或组织的模型设置"
+        transport == null -> "此模型需要当前版本尚未支持的接口：${
+            supportedEndpoints.orEmpty().joinToString().ifBlank { "未提供聊天接口" }
+        }"
+        capabilities?.supports?.streaming == false -> "此模型不支持当前应用所需的流式聊天"
+        needsVision && !supportsVision -> "此会话包含图片，请选择支持视觉的模型后继续"
+        needsTools && !supportsTools -> "此模型不支持 Agent 工具调用，请选择支持工具的聊天模型"
+        else -> null
+    }
 }
 
 @Serializable
@@ -110,7 +138,8 @@ data class ModelCapabilities(
 data class ModelSupports(
     val vision: Boolean = false,
     @SerialName("tool_calls") val toolCalls: Boolean = false,
-    @SerialName("parallel_tool_calls") val parallelToolCalls: Boolean = false
+    @SerialName("parallel_tool_calls") val parallelToolCalls: Boolean = false,
+    val streaming: Boolean? = null
 )
 
 @Serializable

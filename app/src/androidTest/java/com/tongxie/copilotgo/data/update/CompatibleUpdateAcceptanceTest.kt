@@ -36,6 +36,11 @@ class CompatibleUpdateAcceptanceTest {
         verifyFixture("phase3-code36-to37", "0.4.0", 37L, 36L)
     }
 
+    @Test
+    fun accepts_explicit_code38_candidate_while_code37_remains_installed() {
+        verifyFixture("model-web-code37-to38", "0.5.0", 38L, 37L)
+    }
+
     private fun verifyFixture(marker: String, versionName: String, versionCode: Long, predecessorCode: Long) {
         val fixture = explicitFixture(marker, versionName, versionCode)
         val context = InstrumentationRegistry.getInstrumentation().targetContext

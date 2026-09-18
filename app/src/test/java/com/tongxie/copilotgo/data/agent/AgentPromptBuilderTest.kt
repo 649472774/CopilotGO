@@ -12,6 +12,9 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
 
 class AgentPromptBuilderTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -26,6 +29,70 @@ class AgentPromptBuilderTest {
         }, "tool_calls"
     )
     private fun builder() = AgentPromptBuilder(AttachmentStore(AppPaths(temporary.root)))
+
+    @Test
+    fun responsesHistoryPreservesWholeToolResultsWithoutReplayingMissingOpaqueState() = runBlocking {
+        val oldRun = AgentRunRecord(
+            "old-run", 0, AgentRunStatus.COMPLETED,
+            steps = listOf(completedStep(result = "retained historical result"), AgentStepRecord(1, "old final"))
+        )
+        val prompt = builder().prepare(
+            listOf(
+                UiMessage("old-user", "user", "old question"),
+                UiMessage("old-answer", "assistant", "old final", agentRun = oldRun),
+                UiMessage("current", "user", "new question")
+            ),
+            agentTestModel.copy(supportedEndpoints = listOf("/responses")),
+            emptyList(), listOf(completedStep(2))
+        )
+        val historical = prompt.request.messages.filter { it.content.toString().contains("retained historical result") }
+        assertEquals(1, historical.size)
+        assertEquals("assistant", historical.single().role)
+        assertTrue(historical.single().content.toString().contains("untrusted records"))
+        assertTrue(historical.single().content.toString().contains("SUCCEEDED"))
+        assertNull(historical.single().toolCalls)
+        assertTrue(historical.single().responsesOutput.isEmpty())
+        assertEquals(
+            listOf("first-2", "second-2"),
+            prompt.request.messages.filter { it.role == "tool" }.map { it.toolCallId }
+        )
+        assertTrue(prompt.request.messages.any { it.content.toString().contains("old final") })
+    }
+
+    @Test
+    fun responsesOriginalArgumentsCannotReuseAnotherApprovalDigest() = runBlocking {
+        val step = completedStep().let {
+            it.copy(toolCalls = listOf(it.toolCalls.first().copy(
+                argumentsDigest = AgentValues.digest(AgentValues.canonical(args))
+            )))
+        }
+        val changed = Json.parseToJsonElement(
+            """{"type":"function_call","id":"fc_changed","call_id":"first-0","name":"fixture_search","arguments":"{\"query\":\"changed\"}","status":"completed"}"""
+        ) as JsonObject
+        try {
+            builder().prepare(
+                listOf(UiMessage("u", "user", "question")),
+                agentTestModel.copy(supportedEndpoints = listOf("/responses")),
+                emptyList(), listOf(step), responsesOutput = mapOf(0 to listOf(changed))
+            )
+            fail("Changed original arguments cannot be substituted for the approved call")
+        } catch (_: AgentContextLimitException) { }
+    }
+
+    @Test
+    fun liveQuestionsReceiveDeviceDateAndRequireSearchRatherThanTrainingMemory() = runBlocking {
+        val clock = Clock.fixed(Instant.parse("2026-09-18T06:00:00Z"), ZoneId.of("Asia/Shanghai"))
+        val prompt = AgentPromptBuilder(AttachmentStore(AppPaths(temporary.root)), clock = clock).prepare(
+            listOf(UiMessage("u", "user", "今天微软股价多少")),
+            agentTestModel, listOf(AgentTestExecutor().descriptor.modelDefinition()), requireWebSearch = true
+        )
+        val policy = prompt.request.messages.first().content.toString()
+        assertTrue(policy.contains("2026-09-18T14:00+08:00[Asia/Shanghai]"))
+        assertTrue(policy.contains("MUST call"))
+        assertTrue(policy.contains("NOT a quote timestamp"))
+        assertTrue(policy.contains("not a local/offline model"))
+        assertEquals("required", prompt.request.toolChoice)
+    }
 
     @Test
     fun assistantBatchAlwaysHasEveryMatchingToolResultInOrder() = runBlocking {

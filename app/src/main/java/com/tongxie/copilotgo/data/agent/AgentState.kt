@@ -41,7 +41,8 @@ data class AgentSessionSettings(
     val enabled: Boolean = false,
     /** Explicit user opt-in; does not authorize arbitrary MCP tools. */
     val autoApprovePublicWebReads: Boolean = false,
-    val limits: AgentLimits = AgentLimits()
+    val limits: AgentLimits = AgentLimits(),
+    val automaticWebSearch: Boolean = true
 )
 
 @Serializable
@@ -138,7 +139,10 @@ data class AgentRunInput(
     val model: ModelInfo,
     val history: List<UiMessage>,
     val settings: AgentSessionSettings,
-    val startedAt: Long = System.currentTimeMillis()
+    val startedAt: Long = System.currentTimeMillis(),
+    val requireWebSearch: Boolean = false,
+    val publicWebOnly: Boolean = false,
+    val expectedWebRevision: Long? = null
 )
 
 interface AgentRunCallbacks {

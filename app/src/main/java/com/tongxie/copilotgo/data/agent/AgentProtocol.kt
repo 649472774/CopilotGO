@@ -3,6 +3,7 @@ package com.tongxie.copilotgo.data.agent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
@@ -35,7 +36,8 @@ data class AgentChatMessage(
     val role: String,
     val content: JsonElement? = null,
     @SerialName("tool_calls") val toolCalls: List<AgentToolCall>? = null,
-    @SerialName("tool_call_id") val toolCallId: String? = null
+    @SerialName("tool_call_id") val toolCallId: String? = null,
+    @Transient val responsesOutput: List<JsonObject> = emptyList()
 )
 
 @Serializable
@@ -55,7 +57,8 @@ sealed interface AgentStreamEvent {
     data class Completed(
         val finishReason: String,
         val toolCalls: List<AgentToolCall> = emptyList(),
-        val choiceIndex: Int = 0
+        val choiceIndex: Int = 0,
+        val responsesOutput: List<JsonObject> = emptyList()
     ) : AgentStreamEvent
 }
 

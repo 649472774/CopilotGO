@@ -116,7 +116,7 @@ class AgentUiAcceptanceTest {
         }
     }
 
-    @Test fun defaultChatAndUnavailableToolsAreExplicitAtLargeFont() {
+    @Test fun defaultAutomaticAndUnavailableToolsAreExplicitAtLargeFont() {
         val openedSettings = AtomicInteger()
         rule.setContent {
             FixtureTheme {
@@ -133,7 +133,7 @@ class AgentUiAcceptanceTest {
                 )
             }
         }
-        rule.onNodeWithText(text(R.string.agent_mode_chat)).assertIsSelected()
+        rule.onNodeWithTag("agent-mode-automatic").assertIsSelected()
         rule.onNodeWithTag("agent-mode-choice").assertIsNotEnabled().assertHeightIsAtLeast(48.dp)
         rule.onNodeWithText(text(R.string.agent_model_no_tools)).performScrollTo().assertIsDisplayed()
         saveScreenshot("agent-mode-disabled-200")

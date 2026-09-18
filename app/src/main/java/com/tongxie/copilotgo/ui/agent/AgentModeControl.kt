@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.annotation.StringRes
 import com.tongxie.copilotgo.R
 import com.tongxie.copilotgo.data.agent.AgentSessionSettings
 import com.tongxie.copilotgo.data.chat.ModelInfo
@@ -43,14 +44,32 @@ import com.tongxie.copilotgo.ui.settings.SettingsSection
 import com.tongxie.copilotgo.ui.settings.SettingsToggleRow
 import com.tongxie.copilotgo.ui.theme.AppLayout
 
+internal enum class ChatMode(@param:StringRes val label: Int) {
+    AUTOMATIC(R.string.agent_mode_automatic),
+    CHAT(R.string.agent_mode_chat),
+    AGENT(R.string.agent_mode_agent)
+}
+
+internal fun AgentSessionSettings.chatMode(): ChatMode = when {
+    enabled -> ChatMode.AGENT
+    automaticWebSearch -> ChatMode.AUTOMATIC
+    else -> ChatMode.CHAT
+}
+
+internal fun AgentSessionSettings.withChatMode(mode: ChatMode): AgentSessionSettings = when (mode) {
+    ChatMode.AUTOMATIC -> copy(enabled = false, automaticWebSearch = true)
+    ChatMode.CHAT -> copy(enabled = false, automaticWebSearch = false)
+    ChatMode.AGENT -> copy(enabled = true)
+}
+
 @Composable
 internal fun AgentModeButton(
-    enabled: Boolean,
+    settings: AgentSessionSettings,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     interactive: Boolean = true
 ) {
-    val label = stringResource(if (enabled) R.string.agent_mode_agent else R.string.agent_mode_chat)
+    val label = stringResource(settings.chatMode().label)
     val description = stringResource(R.string.agent_mode_current, label)
     TextButton(
         onClick = onClick,
@@ -115,20 +134,35 @@ internal fun AgentModeContent(
         ) {
             Column(Modifier.selectableGroup()) {
                 SettingsChoiceRow(
-                    title = stringResource(R.string.agent_mode_chat),
-                    detail = stringResource(R.string.agent_chat_detail),
-                    selected = !draft.enabled,
+                    title = stringResource(R.string.agent_mode_automatic),
+                    detail = stringResource(R.string.agent_automatic_detail),
+                    selected = draft.chatMode() == ChatMode.AUTOMATIC,
                     enabled = !saving && !stale,
-                    onClick = { draft = draft.copy(enabled = false, autoApprovePublicWebReads = false) }
+                    modifier = Modifier.testTag("agent-mode-automatic"),
+                    onClick = { draft = draft.withChatMode(ChatMode.AUTOMATIC) }
+                )
+                SettingsChoiceRow(
+                    title = stringResource(R.string.agent_mode_chat),
+                    detail = stringResource(R.string.agent_ordinary_chat_detail),
+                    selected = draft.chatMode() == ChatMode.CHAT,
+                    enabled = !saving && !stale,
+                    modifier = Modifier.testTag("agent-mode-chat"),
+                    onClick = { draft = draft.withChatMode(ChatMode.CHAT) }
                 )
                 SettingsChoiceRow(
                     title = stringResource(R.string.agent_mode_agent),
-                    detail = stringResource(disabledReason ?: R.string.agent_mode_detail),
-                    selected = draft.enabled,
+                    detail = stringResource(disabledReason ?: R.string.agent_full_mode_detail),
+                    selected = draft.chatMode() == ChatMode.AGENT,
                     enabled = !saving && !stale && disabledReason == null,
                     modifier = Modifier.testTag("agent-mode-choice"),
-                    onClick = { draft = draft.copy(enabled = true) }
+                    onClick = { draft = draft.withChatMode(ChatMode.AGENT) }
                 )
+            }
+            if (draft.chatMode() == ChatMode.AUTOMATIC) {
+                Text(stringResource(R.string.agent_automatic_scope), style = MaterialTheme.typography.bodyLarge)
+                if (model?.chatCompatible == true && !model.supportsTools) {
+                    FeedbackBanner(stringResource(R.string.agent_automatic_model_no_tools))
+                }
             }
             if (draft.enabled) {
                 HorizontalDivider()

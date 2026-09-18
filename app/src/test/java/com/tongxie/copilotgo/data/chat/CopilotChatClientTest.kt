@@ -19,10 +19,11 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class CopilotChatClientTest {
-    @get:Rule val temporary = TemporaryFolder()
+    @get:Rule val temporary = TemporaryFolder(File("build", "chat-client-fixtures").also { it.mkdirs() })
     private val request = ChatRequest("fixture-chat", listOf(ChatMessage("user", "fixture question")))
 
     @Test
@@ -48,7 +49,7 @@ class CopilotChatClientTest {
                 fixture.client.streamChat(request).collect()
                 fail("Malformed data was ignored")
             } catch (_: StreamProtocolException) {
-                assertEquals(1, fixture.requests.size)
+                assertEquals(1, fixture.requests.count { it.path == "/chat/completions" })
             }
         }
     }
@@ -82,6 +83,8 @@ class CopilotChatClientTest {
             assertEquals("answer", deltas.joinToString("") { it.text })
             assertEquals(1, deltas.count { it.isFinal })
             assertEquals("length", deltas.last().finishReason)
+            assertEquals("model-access", fixture.requests.first().getHeader("Openai-Intent"))
+            fixture.requests.removeAll { it.path == "/models" }
             assertEquals("Bearer fixture-bearer", fixture.requests.single().getHeader("Authorization"))
             assertEquals("identity", fixture.requests.single().getHeader("Accept-Encoding"))
         }
@@ -119,14 +122,17 @@ class CopilotChatClientTest {
     }
 
     @Test
-    fun discoveryFiltersNonChatDisabledAndUnsupportedEndpointModels() = runBlocking {
+    fun discoveryKeepsVisibleModelsAndReasonsButNotInternalAliases() = runBlocking {
         CoreFixture(temporary.root).use { fixture ->
             fixture.models = { MockResponse().setBody(
-                """{"data":[{"id":"chat","capabilities":{"type":"chat","supports":{"vision":true}}},{"id":"embedding","capabilities":{"type":"embeddings"}},{"id":"disabled","policy":{"state":"disabled"}},{"id":"responses-only","supported_endpoints":["/responses"]},{"id":"hidden","model_picker_enabled":false}]}"""
+                """{"data":[{"id":"chat","capabilities":{"type":"chat","supports":{"vision":true}}},{"id":"embedding","capabilities":{"type":"embeddings"}},{"id":"disabled","policy":{"state":"disabled"}},{"id":"responses-only","supported_endpoints":["/responses"]},{"id":"messages-only","supported_endpoints":["/v1/messages"]},{"id":"hidden","model_picker_enabled":false}]}"""
             ) }
             val models = fixture.client.listModels()
-            assertEquals(listOf("chat"), models.map { it.id })
-            assertTrue(models.single().supportsVision)
+            assertEquals(listOf("chat", "disabled", "responses-only", "messages-only"), models.map { it.id })
+            assertTrue(models.first().supportsVision)
+            assertTrue(models.single { it.id == "responses-only" }.chatCompatible)
+            assertNotNull(models.single { it.id == "disabled" }.unavailableReason())
+            assertNotNull(models.single { it.id == "messages-only" }.unavailableReason())
         }
     }
 
@@ -136,7 +142,8 @@ class CopilotChatClientTest {
             fixture.replies.add(CoreFixture.sse("data: [DONE]\n\n").setBodyDelay(1, TimeUnit.SECONDS))
             val stream = async { fixture.client.streamChat(request).toList() }
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                assertNotNull(fixture.server.takeRequest(3, TimeUnit.SECONDS))
+                assertEquals("/models", fixture.server.takeRequest(3, TimeUnit.SECONDS)?.path)
+                assertEquals("/chat/completions", fixture.server.takeRequest(3, TimeUnit.SECONDS)?.path)
             }
             fixture.auth.logout()
             try {
@@ -153,6 +160,25 @@ class CopilotChatClientTest {
         CoreFixture(temporary.root).use { fixture ->
             val chunks = (1..20).joinToString("") {
                 "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
+            }
+
+            @Test
+            fun bareDoneAndErrorsAfterFinishNeverInventOrdinarySuccess() = runBlocking {
+                CoreFixture(temporary.root).use { fixture ->
+                    for (body in listOf(
+                        "data: [DONE]\n\n",
+                        agentSse(agentChunk(content = "partial", finish = "stop"), SseEvent("error", "{}"))
+                    )) {
+                        fixture.replies.add(CoreFixture.sse(body))
+                        val deltas = mutableListOf<CopilotChatClient.ChatDelta>()
+                        try {
+                            fixture.client.streamChat(request).collect { deltas.add(it) }
+                            fail("A missing terminal or trailing error was swallowed")
+                        } catch (_: java.io.IOException) {
+                            assertFalse(deltas.any { it.isFinal })
+                        }
+                    }
+                }
             }
             fixture.replies.add(CoreFixture.sse(chunks + "event: error\ndata: {}\n\n"))
             val text = StringBuilder()

@@ -21,8 +21,10 @@ request without losing a draft or obscuring the state of ongoing work.
 ## Positioning
 
 The native client uses the user's GitHub Copilot subscription. A separate Remote
-WebView opens GitHub's remote experience. Optional, explicitly selected Agent mode
-uses real search, page-reading, and MCP tools; it does not simulate tool results.
+WebView opens GitHub's remote experience. Automatic mode routes common current-
+information questions to real public web tools after a separate first-use consent.
+Ordinary chat remains tool-free. Explicitly selected full Agent mode additionally
+supports approved MCP tools; it does not simulate tool results.
 
 ## Operating Context
 
@@ -38,14 +40,18 @@ from a conversation.
   file library, history, model selection, and system speech-to-text entry.
 - Preserve explicit Agent mode, exact approval and source identity, cancellation,
   uncertain-result protection, and private-credential isolation.
+- Automatic search must not reuse old manual-sharing consent, expose MCP tools,
+  erase an unaccepted draft, or substitute model memory for a failed live search.
 - Preserve existing drafts, attachments, conversation data, signing identity,
   and in-place update compatibility.
 - Agent application HTTP/CONNECT/SOCKS proxy support is deliberately deferred.
   Direct access or a suitable system VPN is supported, with explicit failures
   rather than silent proxy bypass.
 - Remote has a separate WebView transport, cookie, window, and IME lifecycle.
-- This redesign does not add voice conversations, image generation, cloud sync,
-  new accounts, or new models.
+- The client discovers model access from the account service, not a hardcoded
+  subscription list; unsupported protocols and policy restrictions remain explicit.
+- This product does not add voice conversations, image generation, cloud sync,
+  or new accounts.
 
 ## Brand Commitments
 

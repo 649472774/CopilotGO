@@ -35,6 +35,18 @@ class WebContentTest {
         assertEquals("https://developer.android.com/develop/ui/compose/documentation", result.sources[0].url)
         assertTrue(result.sources.all { it.kind == SourceKind.SEARCH_HIT })
         assertTrue(result.content.contains("尚未读取"))
+        assertTrue(result.sources[1].excerpt!!.contains("Published Date: 2026-08-01"))
+    }
+
+    @Test
+    fun currentExaPublishedAndHighlightsFieldsRemainAttributedToTheirActualSource() {
+        val result = ExaSearchParser.parse(
+            "Title: Quote\nPublished: 2026-09-18T05:30:00Z\nURL: https://example.com/quote\n" +
+                "Highlights:\nDelayed quote, not a live market feed.",
+            1
+        )
+        assertTrue(result.sources.single().excerpt!!.contains("2026-09-18T05:30:00Z"))
+        assertTrue(result.content.contains("Delayed quote"))
     }
 
     @Test

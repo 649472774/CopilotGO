@@ -33,16 +33,20 @@ class AgentPresentationTest {
     )
     private val run = AgentRunRecord("run-1", 7, AgentRunStatus.AWAITING_APPROVAL, pendingApproval = request)
 
-    @Test fun modeStartsAsOrdinaryChatAndRequiresDeclaredCompatibleTools() {
-        assertFalse(AgentSessionSettings().enabled)
-        assertFalse(AgentSessionSettings().autoApprovePublicWebReads)
+    @Test fun automaticIsDefaultAndFullAgentRequiresDeclaredCompatibleTools() {
+        val settings = AgentSessionSettings()
+        assertEquals(ChatMode.AUTOMATIC, settings.chatMode())
+        assertTrue(settings.automaticWebSearch)
+        assertFalse(settings.enabled)
+        assertFalse(settings.autoApprovePublicWebReads)
         assertEquals(R.string.agent_model_missing, agentModelDisabledReason(null))
         assertEquals(R.string.agent_model_no_tools, agentModelDisabledReason(ModelInfo("fixture")))
         val capable = ModelInfo("fixture", capabilities = ModelCapabilities(supports = ModelSupports(toolCalls = true)))
         assertNull(agentModelDisabledReason(capable))
+        assertNull(agentModelDisabledReason(capable.copy(supportedEndpoints = listOf("/responses"))))
         assertEquals(
             R.string.agent_model_incompatible,
-            agentModelDisabledReason(capable.copy(supportedEndpoints = listOf("/responses")))
+            agentModelDisabledReason(capable.copy(supportedEndpoints = listOf("/unsupported-chat")))
         )
     }
 

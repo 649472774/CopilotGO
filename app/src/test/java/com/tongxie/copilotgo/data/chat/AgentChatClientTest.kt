@@ -58,7 +58,7 @@ class AgentChatClientTest {
             assertEquals("identity", sent.getHeader("Accept-Encoding"))
             assertEquals("text/event-stream", sent.getHeader("Accept"))
             assertEquals(Constants.COPILOT_INTEGRATION_ID, sent.getHeader("Copilot-Integration-Id"))
-            assertEquals(Constants.OPENAI_INTENT, sent.getHeader("Openai-Intent"))
+            assertEquals(Constants.AGENT_INTENT, sent.getHeader("Openai-Intent"))
             assertEquals(Constants.USER_AGENT_VSCODE, sent.getHeader("User-Agent"))
             assertEquals(Constants.EDITOR_VERSION, sent.getHeader("Editor-Version"))
             assertEquals(Constants.EDITOR_PLUGIN_VERSION, sent.getHeader("Editor-Plugin-Version"))
@@ -140,9 +140,9 @@ class AgentChatClientTest {
     fun rejectedSelectedModelNeverPostsChatOrSwitchesToDefault() = runBlocking {
         CoreFixture(temporary.root).use { fixture ->
             fixture.models = { MockResponse().setBody(
-                """{"data":[{"id":"fixture-chat","capabilities":{"type":"chat","supports":{"tool_calls":true}}},{"id":"fixture-text","is_chat_default":true,"capabilities":{"type":"chat","supports":{"tool_calls":false}}},{"id":"responses-only","supported_endpoints":["/responses"],"capabilities":{"supports":{"tool_calls":true}}}]}"""
+                """{"data":[{"id":"fixture-chat","capabilities":{"type":"chat","supports":{"tool_calls":true}}},{"id":"fixture-text","is_chat_default":true,"capabilities":{"type":"chat","supports":{"tool_calls":false}}},{"id":"messages-only","supported_endpoints":["/v1/messages"],"capabilities":{"supports":{"tool_calls":true}}}]}"""
             ) }
-            for (id in listOf("fixture-text", "responses-only", "not-in-catalog")) {
+            for (id in listOf("fixture-text", "messages-only", "not-in-catalog")) {
                 failure<ModelUnavailableException> { fixture.client.streamAgentChat(agentTestRequest(id)).collect() }
             }
             assertEquals(listOf("/models"), fixture.requests.map { it.path })
@@ -227,7 +227,7 @@ class AgentChatClientTest {
                 assertEquals("partial", events.joinToString("") { it.text })
                 assertFalse(events.any { it.isFinal })
             }
-            assertEquals(listOf("/chat/completions", "/chat/completions"), fixture.requests.map { it.path })
+            assertEquals(listOf("/models", "/chat/completions", "/chat/completions"), fixture.requests.map { it.path })
         }
     }
 

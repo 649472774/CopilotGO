@@ -26,6 +26,7 @@ class ToolSettingsStoreTest {
         val web = store.awaitReady().web
         assertEquals(SearchProvider.EXA_KEYLESS, web.provider)
         assertFalse(web.externalSharingConsent)
+        assertFalse(web.automaticSearchConsent)
         assertEquals(ToolCredentialState.MISSING, web.credentialState)
         assertEquals(setOf(ToolSettingsStore.NAMESPACE), vault.values.keys)
         expectProblem(ToolProblemCode.CONSENT_REQUIRED) {
@@ -34,6 +35,27 @@ class ToolSettingsStoreTest {
         expectProblem(ToolProblemCode.INVALID_CONFIGURATION) {
             store.updateWeb(WebToolSettingsDraft(true, true, SearchProvider.EXA_API_KEY, true), web.revision)
         }
+    }
+
+    @Test
+    fun automaticSearchNeedsSeparateConsentAndRevocationPersists() = withStore { store, _ ->
+        val original = store.awaitReady().web
+        val manualOnly = store.updateWeb(
+            WebToolSettingsDraft(true, true, SearchProvider.EXA_KEYLESS, true), original.revision
+        )
+        assertFalse(manualOnly.automaticSearchConsent)
+        val automatic = store.updateWeb(
+            WebToolSettingsDraft(manualOnly).copy(automaticSearchConsent = true), manualOnly.revision
+        )
+        assertTrue(automatic.automaticSearchConsent)
+        assertTrue(WebToolSettingsDraft(automatic).automaticSearchConsent)
+        val revoked = store.updateWeb(
+            WebToolSettingsDraft(automatic).copy(externalSharingConsent = false), automatic.revision
+        )
+        assertFalse(revoked.automaticSearchConsent)
+        assertFalse(store.isCurrent(ToolSettingsLimits.WEB_CONFIGURATION_ID, automatic.revision))
+        store.reload()
+        assertFalse(store.awaitReady().web.automaticSearchConsent)
     }
 
     @Test

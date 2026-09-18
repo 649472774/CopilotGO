@@ -51,7 +51,7 @@ class SessionListViewModel(
     }
 
     suspend fun createNew(model: String? = null): Session {
-        val choices = catalog.state.value.models
+        val choices = catalog.state.value.models.filter { it.chatCompatible }
         val pick = model ?: choices.firstOrNull { it.isChatDefault }?.id ?: choices.firstOrNull()?.id.orEmpty()
         val created = Session(UUID.randomUUID().toString(), "新会话", pick)
         store.save(created)

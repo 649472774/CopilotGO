@@ -53,7 +53,7 @@ internal class CoreFixture(root: File, cacheLimit: Int = 2) : AutoCloseable {
                 requests.add(request)
                 return when (request.path) {
                     "/models" -> models()
-                    "/chat/completions" -> replies.poll(2, TimeUnit.SECONDS) ?: MockResponse().setResponseCode(503)
+                    "/chat/completions", "/responses" -> replies.poll(2, TimeUnit.SECONDS) ?: MockResponse().setResponseCode(503)
                     else -> MockResponse().setResponseCode(404)
                 }
             }

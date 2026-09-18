@@ -36,9 +36,30 @@ challenge-bypass fallbacks.
 
 External-sharing consent is required before search or page reading. Search sends
 only the bounded query and result count, not conversation or attachment objects.
+Automatic chat routing additionally requires the separately persisted
+`automaticSearchConsent`; legacy sharing consent does not authorize automatic
+execution. Revoking sharing also revokes this permission. The conversation's
+first-use dialog saves against the displayed revision and preserves an unaccepted
+draft. Automatic runs expose only built-in public search/page tools, never MCP,
+and bind preparation to the exact web configuration revision that was authorized.
+Ordinary/static questions and explicitly tool-free chat do not acquire tools.
+
+Current-information runs require a successful search with actual `SEARCH_HIT`
+provenance before a final answer. A failed search ends visibly instead of silently
+falling back to training memory. Device date/time and time zone are supplied to the
+model; retrieval timestamps are labeled separately from publication/market times.
+Search results can still be cached or delayed and are not a live quote feed.
+
 Exa's actual `Title:` / `URL:` text records become `SEARCH_HIT` sources. Incidental
 URLs, malformed output, challenges, and unsafe destinations are not synthesized
 into results.
+
+The hosted Exa schema can require `objective` as well as `query`. The built-in
+adapter adds an application-owned, fixed source-quality/freshness objective only
+when the discovered schema declares that field, then validates the complete
+request normally. It does not send history/attachments as the objective, bypass
+schema checks, or add undeclared fields to older providers. This adaptation does
+not change arbitrary remote MCP tool arguments.
 
 The page reader fetches public HTTPS HTML or plain text. It validates the MIME type
 before consuming the body, follows guarded GET redirects, and parses HTML locally
