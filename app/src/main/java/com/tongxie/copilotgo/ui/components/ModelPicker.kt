@@ -223,13 +223,13 @@ fun ModelPickerInline(
                                         overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    if (reason != null) {
-                                        Text(
-                                            reason,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    }
+                                }
+                                if (reason != null) {
+                                    Text(
+                                        reason,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
                                 }
                                 Text(
                                     stringResource(when (model.capabilities?.supports?.vision) {

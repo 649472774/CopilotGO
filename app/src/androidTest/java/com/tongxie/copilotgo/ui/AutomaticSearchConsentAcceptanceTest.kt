@@ -21,11 +21,13 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso
@@ -367,7 +369,10 @@ class AutomaticSearchConsentAcceptanceTest {
         }
         rule.onNodeWithTag(ChatTags.SEND).assertIsNotEnabled()
         rule.onNodeWithTag("model_picker").performClick()
-        rule.onNode(hasAnyAncestor(isDialog()) and hasText(reason)).performScrollTo().assertIsDisplayed()
+        rule.onNode(
+            hasAnyAncestor(isDialog()) and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
+        ).performScrollToNode(hasText(reason))
+        rule.onNode(hasAnyAncestor(isDialog()) and hasText(reason)).assertIsDisplayed()
     }
 
     @Composable
