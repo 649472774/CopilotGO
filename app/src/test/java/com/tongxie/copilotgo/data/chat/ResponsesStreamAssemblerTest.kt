@@ -110,12 +110,12 @@ class ResponsesStreamAssemblerTest {
     }
 
     @Test
-    fun mismatchedIdsArgumentsMissingOutputsAndRefusalsFailClosed() {
+    fun mismatchedCallsArgumentsMissingOutputsAndRefusalsFailClosed() {
         for (event in listOf(
-            responseArguments("{}", id = "different"),
+            responseArguments("{}", index = 1),
             responseItemDone(0, responseCall(callId = "changed")),
             responseItemDone(0, responseCall(name = "changed")),
-            responseItemDone(0, responseCall(id = "changed")),
+            responseItemDone(0, responseReasoning()),
             responseItemDone(0, responseCall("[]")),
             responseItemDone(0, responseCall("""{"x":1,"x":2}""")),
             responseCompleted(responseMessage("unrelated"))

@@ -173,6 +173,22 @@ workflow 只有只读 contents 权限，不读取或上传用户签名材料，�
 真实 Exa 冒烟使用无账户、无凭据的临时设置及公开天气/股票/文档查询；
 这不是对真实 Copilot 账户所有模型权限、实时行情精度或任意代理路线的保证。
 
+`v0.5.0` 聊天故障回归还必须覆盖 Copilot Responses 的不透明标识契约：
+公开生产 SSE 样例中的 `response.id` 为 416 字符、`item.id` / `item_id` 为
+412 字符 Base64，并且逐事件变化；它们不是工具名，也不能用作跨事件稳定关联键。
+旧版把这些字段送入 128 字符的工具调用标识校验，在普通无工具聊天的
+`response.created` 就会报“工具调用标识或名称无效”。仅放宽长度仍会在后续事件失败。
+修复按同一 HTTP 流的 `output_index` 关联，保留类型、稳定 `call_id`、名称、参数、
+完整终态及已知标识跨索引冲突检查；最终续接保留服务端原始输出，不改写加密标识。
+Responses 标识的 4096 字符上限是本地资源防线，不是声称上游协议规定的最大值；
+工具调用标识仍限 128 字符，函数名仍限 64 字符并使用函数名字符集。
+依据：[公开同类故障及 SSE](https://github.com/OpeOginni/github-copilot-openai-compatible/issues/1)、
+[官方按输出索引处理的实现](https://github.com/microsoft/vscode-copilot-chat/blob/8b43cd385bcfdc01aef5604434d2bbff73c66a5b/src/platform/endpoint/node/responsesApi.ts)。
+仓库回归只生成同形安全合成值，不保存生产标识、凭据或私人会话。
+这些回归和编译结果不等于真实账户通过：另一个全新验收会话必须确认用户界面所选
+“GPT5.6 SOL”的实际目录项，贯通已安装 APK 的普通新会话、多轮对话、自动联网及
+手动 Agent，再由发布负责人决定版本与发布；不得换模型绕过或用 fixture 绿灯代替。
+
 `scripts/run-native-acceptance.ps1` 复用现有 AndroidJUnitRunner，供独占设备 lane
 记录每次实际运行。它不启动模拟器、不安装 APK、不写入种子、不清数据，也不修改
 字体、显示或旋转设置。调用时提供明确的 `-Serial`、`-Label`、已存在的绝对路径

@@ -5,6 +5,8 @@ import com.tongxie.copilotgo.data.chat.AgentJsonGuard
 import com.tongxie.copilotgo.data.chat.AgentRequestEncoder
 import com.tongxie.copilotgo.data.chat.ModelUnavailableException
 import com.tongxie.copilotgo.data.chat.StreamProtocolException
+import com.tongxie.copilotgo.data.chat.agentToolCallId
+import com.tongxie.copilotgo.data.chat.agentToolName
 import com.tongxie.copilotgo.data.net.networkErrorMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -330,7 +332,9 @@ class AgentEngine(
             }
 
             calls.forEach { call ->
-                if (!CALL_ID.matches(call.id) || call.type != "function" || !NAME.matches(call.function.name) ||
+                agentToolCallId(call.id)
+                agentToolName(call.function.name)
+                if (call.type != "function" ||
                     AgentValues.utf8Size(call.function.arguments) > limits.maxArgumentBytes
                 ) throw StreamProtocolException("工具调用格式无效或参数超过安全限制")
             }
@@ -569,7 +573,6 @@ class AgentEngine(
 
     companion object {
         private val NAME = Regex("[A-Za-z0-9_-]{1,64}")
-        private val CALL_ID = Regex("[\\x21-\\x7e]{1,128}")
         private val SOURCE_ID = Regex("S[1-9][0-9]{0,5}")
         private const val MAX_SOURCES_PER_CALL = 16
         private const val MAX_SOURCES_PER_RUN = 64

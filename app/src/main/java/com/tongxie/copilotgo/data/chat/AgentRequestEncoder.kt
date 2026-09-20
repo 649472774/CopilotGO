@@ -74,7 +74,7 @@ internal object AgentRequestEncoder {
         val toolNames = HashSet<String>()
         val tools = request.tools.map { tool ->
             agentCheck(tool.type == "function", "Agent 仅支持 function 工具")
-            agentIdentity(tool.function.name, AgentWireLimits.MAX_NAME_CHARACTERS)
+            agentToolName(tool.function.name)
             agentCheck(toolNames.add(tool.function.name), "Agent 工具名称重复")
             agentUtf8Size(tool.function.description, 16 * 1024)
             val schema = AgentJsonGuard.TreeBudget(AgentWireLimits.MAX_SCHEMA_BYTES).copy(
@@ -124,8 +124,8 @@ internal object AgentRequestEncoder {
                 agentCheck(message.role == "assistant", "只有 assistant 消息可包含工具调用")
                 agentCheck(calls.size in 1..AgentWireLimits.MAX_TOOLS, "Agent 工具调用数量无效")
                 calls.map { call ->
-                    agentIdentity(call.id, AgentWireLimits.MAX_ID_CHARACTERS)
-                    agentIdentity(call.function.name, AgentWireLimits.MAX_NAME_CHARACTERS)
+                    agentToolCallId(call.id)
+                    agentToolName(call.function.name)
                     agentCheck(call.type == "function", "Agent 仅支持 function 工具调用")
                     agentCheck(callIds.add(call.id), "Agent 历史工具调用标识重复")
                     pendingResults.add(call.id)
@@ -136,7 +136,7 @@ internal object AgentRequestEncoder {
                 }
             }
             if (message.role == "tool") {
-                agentIdentity(message.toolCallId.orEmpty(), AgentWireLimits.MAX_ID_CHARACTERS)
+                agentToolCallId(message.toolCallId.orEmpty())
                 agentCheck(content is JsonPrimitive && content.isString, "工具结果必须是完整文字内容")
                 agentCheck(pendingResults.remove(message.toolCallId), "Agent 工具结果缺少匹配调用或已重复")
             } else {

@@ -157,7 +157,7 @@ internal class AgentStreamAssembler(private val json: Json) {
                 agentCheck(it == "function" && (type == null || type == it), "Agent 工具调用类型不一致")
                 type = it
             }
-            identity(id, fragment.string("id"), AgentWireLimits.MAX_ID_CHARACTERS, repeatedHeader)
+            identity(id, fragment.string("id"), AgentWireLimits.MAX_TOOL_CALL_ID_CHARACTERS, repeatedHeader)
             val function = fragment["function"]
             agentCheck(function == null || function == JsonNull || function is JsonObject, "Agent 工具 function 格式无效")
             if (function is JsonObject) {
@@ -170,8 +170,8 @@ internal class AgentStreamAssembler(private val json: Json) {
                     argumentBytes += size
                     arguments.append(part)
                     if (part.isNotEmpty()) {
-                        agentIdentity(id.toString(), AgentWireLimits.MAX_ID_CHARACTERS)
-                        agentIdentity(name.toString(), AgentWireLimits.MAX_NAME_CHARACTERS)
+                        agentToolCallId(id.toString())
+                        agentToolName(name.toString())
                         agentCheck(type == "function", "Agent 工具调用缺少类型")
                         identitySealed = true
                     }
@@ -191,8 +191,8 @@ internal class AgentStreamAssembler(private val json: Json) {
         }
 
         fun complete(): AgentToolCall {
-            agentIdentity(id.toString(), AgentWireLimits.MAX_ID_CHARACTERS)
-            agentIdentity(name.toString(), AgentWireLimits.MAX_NAME_CHARACTERS)
+            agentToolCallId(id.toString())
+            agentToolName(name.toString())
             agentCheck(type == "function", "Agent 工具调用缺少 function 类型")
             val completeArguments = arguments.toString()
             AgentJsonGuard.objectValue(completeArguments, AgentWireLimits.MAX_ARGUMENT_BYTES)

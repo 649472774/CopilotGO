@@ -23,7 +23,8 @@ internal object AgentWireLimits {
     const val MAX_REQUEST_BYTES = 24 * 1024 * 1024
     const val MAX_MESSAGES = 512
     const val MAX_NAME_CHARACTERS = 64
-    const val MAX_ID_CHARACTERS = 128
+    const val MAX_TOOL_CALL_ID_CHARACTERS = 128
+    const val MAX_RESPONSES_ID_CHARACTERS = 4096
 }
 
 internal fun agentCheck(condition: Boolean, message: String) {
@@ -50,12 +51,27 @@ internal fun agentUtf8Size(text: String, limit: Int): Int {
     return bytes
 }
 
-internal fun agentIdentity(value: String, limit: Int) {
+internal fun agentToolName(value: String) {
     agentCheck(
-        value.isNotBlank() && value.length <= limit &&
-            value.all { it.code in 0x21..0x7e },
-        "工具调用标识或名称无效"
+        value.length in 1..AgentWireLimits.MAX_NAME_CHARACTERS &&
+            value.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '-' },
+        "工具名称必须是 1 至 64 位英文字母、数字、下划线或连字符"
     )
+}
+
+internal fun agentToolCallId(value: String) =
+    agentOpaqueId(value, AgentWireLimits.MAX_TOOL_CALL_ID_CHARACTERS, "工具调用标识")
+
+internal fun agentResponseId(value: String) =
+    agentOpaqueId(value, AgentWireLimits.MAX_RESPONSES_ID_CHARACTERS, "Responses 回复标识")
+
+internal fun agentOutputItemId(value: String) =
+    agentOpaqueId(value, AgentWireLimits.MAX_RESPONSES_ID_CHARACTERS, "Responses 输出项标识")
+
+private fun agentOpaqueId(value: String, limit: Int, field: String) {
+    agentCheck(value.isNotEmpty(), "${field}为空")
+    agentCheck(value.length <= limit, "${field}超过本地安全长度限制（$limit 字符）")
+    agentCheck(value.all { it.code in 0x21..0x7e }, "${field}含有空白、控制或非 ASCII 字符")
 }
 
 internal object AgentJsonGuard {

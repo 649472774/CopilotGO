@@ -18,12 +18,14 @@ internal class ResponsesStreamAssembler(
     private val allowTools: Boolean = true
 ) {
     private val items = sortedMapOf<Int, Item>()
+    private val itemIndexes = HashMap<String, Int>()
     private var eventCount = 0
     private var streamBytes = 0L
     private var argumentBytes = 0
     private var characters = 0
     private var lastTextPosition = -1
-    private var responseId: String? = null
+    private var responseCreated = false
+    private var lastSequence = -1
     private var terminal: AgentStreamEvent.Completed? = null
     private var delivered = false
     private var failed = false
@@ -55,6 +57,12 @@ internal class ResponsesStreamAssembler(
             }
             val root = AgentJsonGuard.objectValue(event.data, AgentWireLimits.MAX_EVENT_BYTES)
             checkError(root)
+            root["sequence_number"]?.let { value ->
+                val sequence = (value as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+                agentCheck(sequence != null && sequence >= 0 && sequence > lastSequence,
+                    "Responses 事件序号无效或发生重复、倒序")
+                lastSequence = requireNotNull(sequence)
+            }
             val type = root.string("type") ?: event.event
             agentCheck(event.event == "message" || event.event == type, "Responses 事件名称与内容不一致")
             agentCheck(terminal == null, "Responses 成功状态后仍有增量或重复完成事件")
@@ -62,19 +70,23 @@ internal class ResponsesStreamAssembler(
             when (type) {
                 "error" -> throw apiFailure(null, event.data, json)
                 "response.created", "response.in_progress", "response.queued" -> {
+                    if (type == "response.created") {
+                        agentCheck(!responseCreated && items.isEmpty(), "Responses 回复开始事件重复或顺序无效")
+                        responseCreated = true
+                    }
                     val response = root.objectField("response")
-                    bindResponse(response)
+                    validateResponse(response)
                     agentCheck(response.string("status") in setOf("queued", "in_progress"),
                         "Responses 开始事件状态无效")
                 }
                 "response.failed" -> {
                     val response = root.objectField("response")
-                    bindResponse(response)
+                    validateResponse(response)
                     throw apiFailure(null, response.toString(), json)
                 }
                 "response.incomplete" -> {
                     val response = root.objectField("response")
-                    bindResponse(response)
+                    validateResponse(response)
                     val reason = (response["incomplete_details"] as? JsonObject)?.string("reason")
                     if (reason == "content_filter") throw apiFailure(null, """{"code":"content_filter"}""", json)
                     throw StreamProtocolException(
@@ -126,7 +138,7 @@ internal class ResponsesStreamAssembler(
                 "response.output_text.annotation.added" -> eventItem(root, "message")
                 "response.completed" -> {
                     val response = root.objectField("response")
-                    bindResponse(response)
+                    validateResponse(response)
                     agentCheck(response.string("status") == "completed", "Responses 结束事件未确认成功")
                     checkError(response)
                     val output = response["output"] as? JsonArray
@@ -169,12 +181,17 @@ internal class ResponsesStreamAssembler(
         return completed.copy(responsesOutput = outputItems)
     }
 
-    private fun bindResponse(response: JsonObject) {
-        val id = response.requiredString("id")
-        agentIdentity(id, AgentWireLimits.MAX_ID_CHARACTERS)
-        agentCheck(responseId == null || responseId == id, "Responses 回复标识发生变化")
-        responseId = id
+    private fun validateResponse(response: JsonObject) {
+        // Copilot re-encrypts response/item IDs per event; they are not stream correlation keys.
+        agentResponseId(response.requiredString("id"))
         checkError(response)
+    }
+
+    private fun bindItemId(id: String, index: Int) {
+        agentOutputItemId(id)
+        // Remember aliases within this bounded HTTP stream, but never let one cross output indexes.
+        val previous = itemIndexes.putIfAbsent(id, index)
+        agentCheck(previous == null || previous == index, "Responses 输出项标识与索引不一致")
     }
 
     private fun checkError(root: JsonObject) {
@@ -187,7 +204,7 @@ internal class ResponsesStreamAssembler(
         val index = root.index("output_index")
         val item = items[index] ?: throw StreamProtocolException("Responses 增量缺少输出项标识")
         agentCheck(item.kind == kind && !item.finished, "Responses 增量对应的输出类型或状态不一致")
-        agentCheck(item.id == root.requiredString("item_id"), "Responses 增量输出标识不一致")
+        bindItemId(root.requiredString("item_id"), index)
         return index to item
     }
 
@@ -201,12 +218,9 @@ internal class ResponsesStreamAssembler(
         val kind = value.requiredString("type")
         agentCheck(kind in setOf("message", "function_call", "reasoning"), "Responses 输出类型不受支持")
         val id = value.requiredString("id")
-        agentIdentity(id, AgentWireLimits.MAX_ID_CHARACTERS)
-        val item = items.getOrPut(index) {
-            agentCheck(items.values.none { it.id == id }, "Responses 输出项标识重复")
-            Item(kind, id)
-        }
-        agentCheck(item.kind == kind && item.id == id, "Responses 输出项类型或标识发生变化")
+        bindItemId(id, index)
+        val item = items.getOrPut(index) { Item(kind) }
+        agentCheck(item.kind == kind, "Responses 输出项类型发生变化")
         agentCheck(!item.finished || finalResponse, "Responses 输出项重复完成")
         val phase = value.string("phase")
         if (item.finished) agentCheck(item.phase == phase, "Responses 已完成输出的阶段标识发生变化")
@@ -232,8 +246,8 @@ internal class ResponsesStreamAssembler(
                     "Responses 工具调用数量超过限制")
                 val callId = value.requiredString("call_id")
                 val name = value.requiredString("name")
-                agentIdentity(callId, AgentWireLimits.MAX_ID_CHARACTERS)
-                agentIdentity(name, AgentWireLimits.MAX_NAME_CHARACTERS)
+                agentToolCallId(callId)
+                agentToolName(name)
                 agentCheck(item.callId == null || item.callId == callId, "Responses call_id 发生变化")
                 agentCheck(item.name == null || item.name == name, "Responses 工具名称发生变化")
                 item.callId = callId
@@ -262,7 +276,7 @@ internal class ResponsesStreamAssembler(
         else -> throw StreamProtocolException("Responses 消息内容类型不受支持")
     }
 
-    private inner class Item(val kind: String, val id: String) {
+    private inner class Item(val kind: String) {
         var finished = false
         val texts = sortedMapOf<Int, Text>()
         var callId: String? = null

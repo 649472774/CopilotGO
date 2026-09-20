@@ -25,7 +25,7 @@ internal object ResponsesOutputGuard {
         val text = StringBuilder()
         for (item in snapshot) {
             val id = item.requiredString("id")
-            agentIdentity(id, AgentWireLimits.MAX_ID_CHARACTERS)
+            agentOutputItemId(id)
             agentCheck(ids.add(id), "Responses 续接输出项标识重复")
             agentCheck(item.string("status") in setOf(null, "completed"), "Responses 续接输出尚未完成")
             item.string("phase")?.let { agentCheck(it.length <= 64, "Responses 消息阶段标识过长") }
@@ -63,6 +63,8 @@ internal object ResponsesOutputGuard {
                 }
                 "function_call" -> {
                     val callId = item.requiredString("call_id")
+                    agentToolCallId(callId)
+                    agentToolName(item.requiredString("name"))
                     agentCheck(seenCalls.add(callId), "Responses 续接工具调用重复")
                     val expected = expectedCalls[callId]
                         ?: throw StreamProtocolException("Responses 续接输出含有不匹配的工具调用")
