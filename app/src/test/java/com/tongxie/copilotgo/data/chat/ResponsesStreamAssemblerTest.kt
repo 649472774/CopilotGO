@@ -207,7 +207,7 @@ class ResponsesStreamAssemblerTest {
     }
 
     @Test
-    fun missingMalformedOrChangedEncryptedStateCannotAuthorizeTools() {
+    fun missingMalformedEncryptedStateOrChangedSummaryCannotAuthorizeTools() {
         for (encrypted in listOf(null, JsonNull, JsonPrimitive(""), JsonPrimitive(1))) {
             val reasoning = JsonObject(responseReasoning().filterKeys { it != "encrypted_content" } +
                 (encrypted?.let { mapOf("encrypted_content" to it) } ?: emptyMap()))
@@ -222,7 +222,9 @@ class ResponsesStreamAssemblerTest {
         changed.accept(responseItemDone(0, responseReasoning()))
         assertThrows(StreamProtocolException::class.java) {
             changed.accept(responseCompleted(
-                JsonObject(responseReasoning() + ("encrypted_content" to JsonPrimitive("changed"))),
+                JsonObject(responseReasoning() + ("summary" to JsonArray(listOf(buildJsonObject {
+                    put("type", "summary_text"); put("text", "changed logical summary")
+                })))),
                 responseCall()
             ))
         }

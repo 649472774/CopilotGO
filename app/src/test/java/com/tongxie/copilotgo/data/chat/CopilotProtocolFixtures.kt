@@ -12,8 +12,13 @@ import java.util.Base64
 
 // Synthetic envelopes matching the 416/412-character Base64 IDs and per-event rotation in
 // https://github.com/OpeOginni/github-copilot-openai-compatible/issues/1. No captured IDs are stored.
-internal fun copilotOpaqueId(nonce: Int, response: Boolean = false): String {
-    val bytes = ByteArray(if (response) 310 else 308) { (it * 37).toByte() }
+internal fun copilotOpaqueId(nonce: Int, response: Boolean = false): String =
+    syntheticOpaqueValue(nonce, if (response) 310 else 308)
+
+internal fun copilotOpaqueCiphertext(nonce: Int): String = syntheticOpaqueValue(nonce, 768)
+
+private fun syntheticOpaqueValue(nonce: Int, size: Int): String {
+    val bytes = ByteArray(size) { (it * 37).toByte() }
     repeat(4) { bytes[it] = (nonce ushr (it * 8)).toByte() }
     return Base64.getEncoder().encodeToString(bytes)
 }
@@ -21,10 +26,20 @@ internal fun copilotOpaqueId(nonce: Int, response: Boolean = false): String {
 internal fun copilotResponseEvents(
     events: List<SseEvent>,
     model: String = "gpt-5.6-sol",
-    seed: Int = 0
+    seed: Int = 0,
+    rotateReasoningCiphertext: Boolean = true
 ): List<SseEvent> {
     var nonce = seed
-    fun item(value: JsonObject) = JsonObject(value + ("id" to JsonPrimitive(copilotOpaqueId(nonce++))))
+    fun item(value: JsonObject): JsonObject {
+        val fields = value.toMutableMap()
+        fields["id"] = JsonPrimitive(copilotOpaqueId(nonce++))
+        if (rotateReasoningCiphertext && value.string("type") == "reasoning" &&
+            (value["encrypted_content"] as? JsonPrimitive)?.isString == true
+        ) {
+            fields["encrypted_content"] = JsonPrimitive(copilotOpaqueCiphertext(nonce++))
+        }
+        return JsonObject(fields)
+    }
     return events.mapIndexed { index, event ->
         val root = Json.parseToJsonElement(event.data).jsonObject.toMutableMap()
         (root["item"] as? JsonObject)?.let { root["item"] = item(it) }
@@ -46,9 +61,11 @@ internal fun copilotResponseEvents(
 internal fun copilotTextEvents(
     text: String,
     model: String = "gpt-5.6-sol",
-    seed: Int = 0
+    seed: Int = 0,
+    includeEncryptedReasoning: Boolean = false
 ): List<SseEvent> {
-    val reasoning = JsonObject(responseReasoning().filterKeys { it != "encrypted_content" })
+    val reasoning = if (includeEncryptedReasoning) responseReasoning()
+        else JsonObject(responseReasoning().filterKeys { it != "encrypted_content" })
     return copilotResponseEvents(listOf(
         responseEvent("response.created") {
             put("response", buildJsonObject {

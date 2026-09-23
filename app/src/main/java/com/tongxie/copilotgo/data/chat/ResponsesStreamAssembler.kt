@@ -156,6 +156,7 @@ internal class ResponsesStreamAssembler(
                     agentCheck(calls.isNotEmpty() || items.values.any { item ->
                         item.texts.values.any { it.value.any { char -> !char.isWhitespace() } }
                     }, "Responses 未返回有效回复或工具调用")
+                    // Replay whole terminal items so each opaque ID and ciphertext stay paired.
                     outputItems = ResponsesOutputGuard.snapshot(
                         output.map { it as JsonObject },
                         items.values.joinToString("") { item -> item.texts.values.joinToString("") { it.value } },
@@ -258,13 +259,12 @@ internal class ResponsesStreamAssembler(
             "reasoning" -> if (complete) {
                 val summary = value["summary"] as? JsonArray
                     ?: throw StreamProtocolException("Responses 推理输出缺少 summary")
-                val encrypted = value.string("encrypted_content")
+                // Ciphertext is opaque and may be re-encrypted between complete snapshots.
+                value.string("encrypted_content")
                 if (item.finished) {
-                    agentCheck(item.reasoningSummary == summary && item.encryptedContent == encrypted,
-                        "Responses 已完成的加密推理状态发生变化")
+                    agentCheck(item.reasoningSummary == summary, "Responses 已完成的推理摘要发生变化")
                 }
                 item.reasoningSummary = summary
-                item.encryptedContent = encrypted
             }
         }
         if (complete) item.finished = true
@@ -283,7 +283,6 @@ internal class ResponsesStreamAssembler(
         var name: String? = null
         var phase: String? = null
         var reasoningSummary: JsonArray? = null
-        var encryptedContent: String? = null
         private val arguments = StringBuilder()
         private var bytes = 0
         var argumentsDone = false

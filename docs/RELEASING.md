@@ -189,6 +189,22 @@ Responses 标识的 4096 字符上限是本地资源防线，不是声称上游�
 “GPT5.6 SOL”的实际目录项，贯通已安装 APK 的普通新会话、多轮对话、自动联网及
 手动 Agent，再由发布负责人决定版本与发布；不得换模型绕过或用 fixture 绿灯代替。
 
+后续 Luna 手动验收的“Responses 已完成的加密推理状态发生变化”对应 reasoning
+完成快照检查。旧条件同时比较摘要和密文，但要求 `output_item.done` 与
+`response.completed` 的密文字节相等没有协议依据：`encrypted_content` 是不透明状态，
+不是稳定逻辑摘要。仅密文变化的合成序列即可复现该错误；截图本身未采集 SSE，
+不能据此区分该次是摘要还是密文变化，也不能断言具体字段值或工具执行结果。
+修复仍校验已完成摘要及其他稳定字段，但不跨快照比较密文字节；通过完整终态校验后，
+只原子保留最终 `output` 的完整项（匹配的 ID、密文、摘要等），不拼接早期快照，
+不从旧快照补齐缺失的最终密文。工具续接所需密文、JSON/请求大小、索引/类型、
+稳定调用标识、原始参数和审批摘要、正文及完整生命周期约束保持有效。
+密文仅存在于当前运行的 transport 续接数据，不进入 UI 或持久化会话。
+依据：[官方不透明推理续接说明](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)、
+[官方 SDK 采用完整终态响应的实现](https://github.com/openai/openai-python/blob/009b7f6ae6493e1abfa7583449595f144c8beb5a/src/openai/lib/streaming/responses/_responses.py)。
+合成回归必须覆盖 Luna/Sol 的无工具推理、自动联网、逐次批准的多轮工具续接，
+以及终态篡改、重复执行和密文泄漏拒绝。新的真实 Luna 故障场景及 Sol 回归必须由
+独立 QA 在获授权后执行，旧 Sol 算术单项通过不能用作本次发布放行依据。
+
 `scripts/run-native-acceptance.ps1` 复用现有 AndroidJUnitRunner，供独占设备 lane
 记录每次实际运行。它不启动模拟器、不安装 APK、不写入种子、不清数据，也不修改
 字体、显示或旋转设置。调用时提供明确的 `-Serial`、`-Label`、已存在的绝对路径
